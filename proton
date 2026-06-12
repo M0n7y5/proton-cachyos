@@ -1871,6 +1871,7 @@ class Session:
         self.check_environment("PROTON_NO_XIM", "noxim")
         self.check_environment("PROTON_HEAP_DELAY_FREE", "heapdelayfree")
         self.check_environment("PROTON_HEAP_ZERO_MEMORY", "heapzeromemory")
+        self.check_environment("PROTON_SPATIAL_SOUND", "spatialsound")
         self.check_environment("PROTON_DISABLE_NVAPI", "disablenvapi")
         self.check_environment("PROTON_FORCE_NVAPI", "forcenvapi")
         self.check_environment("PROTON_NVIDIA_LIBS", "nvidialibs")
@@ -2063,6 +2064,12 @@ class Session:
 
         if "heapzeromemory" in self.compat_config:
             self.env["WINE_HEAP_ZERO_MEMORY"] = "1"
+
+        if "spatialsound" in self.compat_config:
+            self.env["WINE_SPATIAL_SOUND"] = "1"
+            phonon = g_proton.lib_dir + "libphonon.so"
+            if "WINE_SPATIAL_PHONON" not in self.env and os.path.isfile(phonon):
+                self.env["WINE_SPATIAL_PHONON"] = phonon
 
         if "heaptopdown" in self.compat_config:
             self.env["WINE_HEAP_TOP_DOWN"] = "1"
