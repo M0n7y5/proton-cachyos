@@ -2071,6 +2071,10 @@ class Session:
             if "WINE_SPATIAL_PHONON" not in self.env and os.path.isfile(phonon):
                 self.env["WINE_SPATIAL_PHONON"] = phonon
 
+        audio_driver = self.env.get("PROTON_AUDIO_DRIVER")
+        if audio_driver and "WINE_AUDIO_DRIVER" not in self.env:
+            self.env["WINE_AUDIO_DRIVER"] = audio_driver
+
         if "heaptopdown" in self.compat_config:
             self.env["WINE_HEAP_TOP_DOWN"] = "1"
 
