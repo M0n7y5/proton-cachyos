@@ -1,0 +1,602 @@
+# Draft workflow for a personal Proton-CachyOS-PipeWire fork.
+# Drop into: .github/workflows/pipewire-proton-ci.yml
+#
+# Based on NelloKudo/proton-cachyos + CachyOS/proton-cachyos
+# (_job_build.yml / snapshot.yml / release.yml), slimmed to one
+# x86_64 redist for free GitHub-hosted runners.
+#
+# Purpose: build Proton against a chosen wine-cachyos SHA (driver CI for
+# _upstream_pipewire work), not only the submodule pin in the proton tree.
+#
+# Prerequisites on the fork:
+#   - dispatch override SHAs exist in CachyOS/wine-cachyos or
+#     M0n7y5/wine-cachyos (the resolver checks both immutable sources)
+#   - Makefile.in already has --with-pipewire + steamrtdeps/build-pipewire.mk
+#     (true on CachyOS/Nello proton 11.0 trees — do not re-add blindly)
+#   - Remove obsolete patches/wine/*PROTON_PW_RT* if the tree no longer
+#     enables PW_STREAM_FLAG_RT_PROCESS by default
+#
+# [FACT] pattern validated by Nello run 29689279331 and CachyOS proton CI.
+# [EST]  single x86_64 cell: ~2.5–3.5h cold, ~25–45m warm with ccache.
+
+name: Proton-CachyOS-PipeWire
+
+on:
+  workflow_dispatch:
+    inputs:
+      wine_sha:
+        description: >-
+          Full 40-char immutable wine-cachyos commit SHA to build.
+          Empty = use the proton repo's wine submodule pin.
+          (Future: repository_dispatch from wine-side CI can supply the same SHA.)
+        type: string
+        required: false
+        default: ''
+      publish_release:
+        description: 'Create/update a GitHub prerelease and upload the tarball'
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Tag name when publish_release=true (e.g. pipewire-11.0-20260720-slr)'
+        type: string
+        default: ''
+  # Tag pushes always use the submodule pin (no wine_sha input on push events).
+  push:
+    tags:
+      - 'pipewire-*-*-slr'
+      - 'pw-cachyos-*-*-slr'
+  # Future: wine-side CI can POST repository_dispatch with client_payload.wine_sha.
+  # repository_dispatch:
+  #   types: [build-proton-with-wine]
+
+concurrency:
+  group: pw-proton-${{ github.ref_name }}-${{ inputs.wine_sha || 'pin' }}
+  cancel-in-progress: true
+
+# Least privilege default: jobs only get a read-capable GITHUB_TOKEN.
+# contents: write is granted solely on the release job (tag + gh release).
+permissions:
+  contents: read
+  actions: read
+
+env:
+  # Keep build name Steam-friendly (directory under compatibilitytools.d).
+  BUILD_PREFIX: Proton-CachyOS-PipeWire
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-slim
+    outputs:
+      full_desc: ${{ steps.version.outputs.full_desc }}
+      build_name: ${{ steps.version.outputs.build_name }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      do_release: ${{ steps.version.outputs.do_release }}
+      wine_sha_input: ${{ steps.version.outputs.wine_sha_input }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - id: version
+        shell: bash
+        env:
+          WINE_SHA_IN: ${{ inputs.wine_sha || '' }}
+        run: |
+          set -euo pipefail
+          if git describe --tags --abbrev=0 >/dev/null 2>&1; then
+            full_desc=$(git describe --long --tags)
+          else
+            full_desc="0.0-g$(git rev-parse --short HEAD)"
+          fi
+          echo "full_desc=$full_desc" >> "$GITHUB_OUTPUT"
+
+          wine_sha_input="${WINE_SHA_IN//[[:space:]]/}"
+          if [[ -n "$wine_sha_input" ]]; then
+            if [[ ! "$wine_sha_input" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::wine_sha must be a full 40-char hex commit SHA (got: ${wine_sha_input})"
+              exit 1
+            fi
+            wine_sha_input=$(echo "$wine_sha_input" | tr 'A-F' 'a-f')
+          fi
+          echo "wine_sha_input=$wine_sha_input" >> "$GITHUB_OUTPUT"
+
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            tag="${{ github.ref_name }}"
+            build_name="${BUILD_PREFIX}-${tag}-x86_64"
+            echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "do_release=true" >> "$GITHUB_OUTPUT"
+          else
+            tag="${{ inputs.release_tag }}"
+            if [[ -n "$wine_sha_input" ]]; then
+              build_name="${BUILD_PREFIX}-${full_desc}-wine${wine_sha_input:0:8}-x86_64"
+            else
+              build_name="${BUILD_PREFIX}-${full_desc}-x86_64"
+            fi
+            if [[ "${{ inputs.publish_release }}" == "true" && -n "$tag" ]]; then
+              echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+              echo "do_release=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "release_tag=" >> "$GITHUB_OUTPUT"
+              echo "do_release=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          echo "build_name=$build_name" >> "$GITHUB_OUTPUT"
+          echo "build_name=$build_name"
+          echo "wine_sha_input=${wine_sha_input:-<submodule pin>}"
+
+  build:
+    name: Build x86_64
+    needs: version
+    runs-on: ubuntu-24.04
+    outputs:
+      wine_sha: ${{ steps.wine-pin.outputs.wine_sha }}
+      wine_source: ${{ steps.wine-pin.outputs.wine_source }}
+      proton_sha: ${{ steps.wine-pin.outputs.proton_sha }}
+    steps:
+      - name: Debloat GitHub runner
+        # Third-party: pin full commit SHA (tag v3 → v3.2.2 peel).
+        uses: endersonmenezes/free-disk-space@7901478139cff6e9d44df5972fd8ab8fcade4db1 # v3.2.2
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          remove_packages: >-
+            azure-cli
+            google-cloud-cli
+            microsoft-edge-stable
+            google-chrome-stable
+            firefox
+            postgresql*
+            temurin-*
+            *llvm*
+            mysql*
+            dotnet-sdk-*
+          remove_packages_one_command: false
+          remove_folders: >-
+            /usr/share/swift
+            /usr/share/miniconda
+            /usr/share/az*
+            /usr/local/lib/node_modules
+            /usr/local/share/chromium
+            /usr/local/share/powershell
+            /usr/local/julia
+            /usr/local/aws-cli
+            /usr/local/aws-sam-cli
+            /usr/share/gradle
+          testing: false
+
+      - name: Prepare host
+        run: sudo apt-get update && sudo apt-get install -y ccache fontforge-nox
+
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: false
+
+      # tree:0 keeps submodule blob download smaller (CachyOS/Nello pattern).
+      # Never use `git submodule update --remote` — non-reproducible moving tip.
+      - name: Submodules
+        run: |
+          set -euo pipefail
+          git submodule update --init --filter=tree:0 --recursive
+          mkdir -p build
+
+      - name: Resolve wine SHA
+        id: wine-pin
+        env:
+          WINE_SHA_INPUT: ${{ needs.version.outputs.wine_sha_input }}
+        run: |
+          set -euo pipefail
+          proton_sha=$(git rev-parse HEAD)
+          echo "proton_sha=$proton_sha" >> "$GITHUB_OUTPUT"
+
+          wine_url=$(git config -f .gitmodules --get submodule.wine.url)
+          wine_fallback_url=https://github.com/M0n7y5/wine-cachyos.git
+          wine_path=$(git config -f .gitmodules --get submodule.wine.path)
+          test -n "$wine_url"
+          test -n "$wine_path"
+          test -d "$wine_path"
+
+          pin_sha=$(git -C "$wine_path" rev-parse HEAD)
+          echo "submodule_pin_sha=$pin_sha" >> "$GITHUB_OUTPUT"
+          echo "wine_url=$wine_url" >> "$GITHUB_OUTPUT"
+
+          override="${WINE_SHA_INPUT//[[:space:]]/}"
+          if [[ -n "$override" ]]; then
+            if [[ ! "$override" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::wine_sha must be full 40-char lowercase hex (got: ${override})"
+              exit 1
+            fi
+            echo "Fetching immutable wine ${override} from configured submodule URL: ${wine_url}"
+            if git -C "$wine_path" fetch --depth=1 "$wine_url" "$override"; then
+              fetched_url="$wine_url"
+            else
+              echo "::warning::SHA not served by configured submodule URL; trying ${wine_fallback_url}"
+              if ! git -C "$wine_path" fetch --depth=1 "$wine_fallback_url" "$override"; then
+                echo "::error::wine ${override} is unavailable from both ${wine_url} and ${wine_fallback_url}"
+                exit 1
+              fi
+              fetched_url="$wine_fallback_url"
+            fi
+            echo "Fetched wine ${override} from ${fetched_url}"
+            got=$(git -C "$wine_path" rev-parse FETCH_HEAD)
+            if [[ "$got" != "$override" ]]; then
+              echo "::error::fetched wine object ${got} != requested ${override}"
+              exit 1
+            fi
+            git -C "$wine_path" checkout --detach --force "$override"
+            wine_sha=$(git -C "$wine_path" rev-parse HEAD)
+            if [[ "$wine_sha" != "$override" ]]; then
+              echo "::error::checkout left wine at ${wine_sha}, expected ${override}"
+              exit 1
+            fi
+            wine_source="dispatch-override"
+          else
+            wine_sha="$pin_sha"
+            wine_source="submodule-pin"
+          fi
+
+          echo "wine_sha=$wine_sha" >> "$GITHUB_OUTPUT"
+          echo "wine_source=$wine_source" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Wine pin"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| proton_sha | \`${proton_sha}\` |"
+            echo "| wine_url | \`${wine_url}\` |"
+            echo "| wine_sha | \`${wine_sha}\` |"
+            echo "| wine_source | \`${wine_source}\` |"
+            echo "| submodule_pin | \`${pin_sha}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "Effective wine_sha=${wine_sha} (${wine_source})"
+
+      # Fail hard before the multi-hour redist if the product claim cannot hold:
+      # umu cmd.exe smoke later will pass even when winepipewire was never built.
+      - name: Pre-build assert driver source + configure
+        env:
+          WINE_SHA: ${{ steps.wine-pin.outputs.wine_sha }}
+        run: |
+          set -euo pipefail
+          wine_path=$(git config -f .gitmodules --get submodule.wine.path)
+          test -d "$wine_path"
+          wine_sha="${WINE_SHA}"
+          test -n "$wine_sha"
+
+          # 1) Effective wine tree must contain winepipewire.drv at this SHA.
+          if ! git -C "$wine_path" cat-file -e "${wine_sha}:dlls/winepipewire.drv/pipewire.c"; then
+            echo "::error::wine ${wine_sha} has no dlls/winepipewire.drv/pipewire.c — refusing to build a tree without the PipeWire driver source"
+            exit 1
+          fi
+          echo "OK: ${wine_sha}:dlls/winepipewire.drv/pipewire.c present"
+
+          # 2) Proton Makefile must actually pass --with-pipewire (WINE_AUTOCONF_ARGS).
+          if [[ ! -f Makefile.in ]]; then
+            echo "::error::Makefile.in missing at proton tree root"
+            exit 1
+          fi
+          if ! grep -nE '^WINE_AUTOCONF_ARGS' -A120 Makefile.in | grep -qE -- '--with-pipewire'; then
+            echo "::error::Makefile.in WINE_AUTOCONF_ARGS is missing --with-pipewire — config would omit winepipewire.drv"
+            grep -nE 'WINE_AUTOCONF|pipewire' Makefile.in || true
+            exit 1
+          fi
+          echo "OK: Makefile.in WINE_AUTOCONF_ARGS includes --with-pipewire"
+          {
+            echo ""
+            echo "### Pre-build driver gates"
+            echo "- wine blob: \`${wine_sha}:dlls/winepipewire.drv/pipewire.c\`"
+            echo "- Makefile.in: \`--with-pipewire\` in WINE_AUTOCONF_ARGS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Configure
+        working-directory: build
+        env:
+          # Match CachyOS/Nello snapshot x86_64 cell.
+          CFLAGS: -O3 -march=nocona -mtune=core-avx2
+          RUSTFLAGS: -Copt-level=3 -Ctarget-cpu=nocona
+          USE_LTO: 0
+        run: |
+          ../configure.sh \
+            --build-name=${{ needs.version.outputs.build_name }} \
+            --container-engine=docker \
+            --enable-ccache
+          # Prove steamrt image selection (also used for cache key).
+          make get-steamrt-image
+
+      - name: Cache identifier
+        working-directory: build
+        id: ccache-id
+        run: |
+          image=$(make get-steamrt-image | tail -1)
+          # Include wine SHA so driver-branch builds do not thrash pin caches incorrectly.
+          checksum=$(echo "$image x86_64-pipewire-v1 ${{ steps.wine-pin.outputs.wine_sha }}" | sha1sum | cut -d' ' -f1)
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "image=$image"
+
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.ccache
+          key: ccache-pw-proton-${{ steps.ccache-id.outputs.checksum }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-pw-proton-${{ steps.ccache-id.outputs.checksum }}-
+
+      - name: Make redist
+        working-directory: build
+        run: make redist
+
+      - name: Assert winepipewire.so in redist + write build-info
+        id: build-info
+        env:
+          BUILD_NAME: ${{ needs.version.outputs.build_name }}
+          WINE_SHA: ${{ steps.wine-pin.outputs.wine_sha }}
+          WINE_SOURCE: ${{ steps.wine-pin.outputs.wine_source }}
+          PROTON_SHA: ${{ steps.wine-pin.outputs.proton_sha }}
+          STEAMRT_IMAGE: ${{ steps.ccache-id.outputs.image }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          info_path="${BUILD_NAME}.build-info.txt"
+          tar_path="build/${BUILD_NAME}.tar.xz"
+          test -f "$tar_path"
+
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          tar -xJf "$tar_path" -C "$work"
+          # tarball root is usually BUILD_NAME/ ; fall back to single top dir.
+          if [[ -d "$work/${BUILD_NAME}" ]]; then
+            root="$work/${BUILD_NAME}"
+          else
+            root=$(find "$work" -mindepth 1 -maxdepth 1 -type d | head -1)
+          fi
+          test -n "$root"
+
+          # --- POST-BUILD: product claim = both unix winepipewire.so shipped ---
+          so64="${root}/files/lib/wine/x86_64-unix/winepipewire.so"
+          so32="${root}/files/lib/wine/i386-unix/winepipewire.so"
+          for so in "$so64" "$so32"; do
+            if [[ ! -f "$so" ]]; then
+              echo "::error::missing ${so#${root}/} in redist — PipeWire driver was omitted from the build"
+              echo "Looking under ${root}/files/lib/wine:"
+              find "${root}/files/lib/wine" -iname '*pipewire*' 2>/dev/null || true
+              exit 1
+            fi
+            if [[ ! -s "$so" ]]; then
+              echo "::error::${so#${root}/} exists but is empty"
+              exit 1
+            fi
+            ft=$(file -b "$so" || true)
+            if [[ "$ft" != *ELF* ]]; then
+              echo "::error::${so#${root}/} is not an ELF shared object (file: ${ft})"
+              exit 1
+            fi
+            if command -v readelf >/dev/null 2>&1; then
+              if ! readelf -h "$so" >/dev/null; then
+                echo "::error::readelf failed on ${so#${root}/}"
+                exit 1
+              fi
+            fi
+            echo "OK: ${so#${root}/} ($(wc -c < "$so") bytes, ${ft})"
+          done
+
+          # Optional-but-included revision fingerprint (update when driver log strings change).
+          # Matches WARN text from core-reconnect invalidate path in pipewire.c
+          # ("invalidating %u live stream(s)..."). Bump the pattern when that message is reworded.
+          if ! strings "$so64" | grep -qE 'invalidating .* live stream'; then
+            echo "::error::x86_64 winepipewire.so lacks expected driver fingerprint string"
+            echo "::error::update the fingerprint grep if the driver log message changed deliberately"
+            exit 1
+          fi
+          echo "OK: driver fingerprint 'invalidating .* live stream' present in x86_64 .so"
+
+          sha64=$(sha256sum "$so64" | awk '{print $1}')
+          sha32=$(sha256sum "$so32" | awk '{print $1}')
+          echo "winepipewire_x86_64_sha256=${sha64}"
+          echo "winepipewire_i386_sha256=${sha32}"
+
+          {
+            echo "build_name=${BUILD_NAME}"
+            echo "proton_repo=${{ github.repository }}"
+            echo "proton_sha=${PROTON_SHA}"
+            echo "proton_ref=${{ github.ref }}"
+            echo "wine_sha=${WINE_SHA}"
+            echo "wine_source=${WINE_SOURCE}"
+            echo "wine_url=$(git config -f .gitmodules --get submodule.wine.url)"
+            echo "steamrt_image=${STEAMRT_IMAGE}"
+            echo "workflow_run=${RUN_URL}"
+            echo "built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "winepipewire_x86_64_unix_sha256=${sha64}"
+            echo "winepipewire_i386_unix_sha256=${sha32}"
+          } | tee "$info_path"
+
+          # Pack metadata into the redist tree and refresh the tarball + checksum
+          # so testers get wine_sha even if they only download the .tar.xz.
+          cp -f "$info_path" "$root/build-info.txt"
+          tar -C "$work" -cJf "$tar_path" "$(basename "$root")"
+          (cd build && sha512sum "${BUILD_NAME}.tar.xz" > "${BUILD_NAME}.sha512sum")
+          cp -f "$info_path" "build/${BUILD_NAME}.build-info.txt"
+
+          {
+            echo ""
+            echo "### build-info.txt"
+            echo '```'
+            cat "$info_path"
+            echo '```'
+            echo ""
+            echo "### Post-build winepipewire.so"
+            echo "| Arch | sha256 |"
+            echo "|---|---|"
+            echo "| x86_64-unix | \`${sha64}\` |"
+            echo "| i386-unix | \`${sha32}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.ccache
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
+
+      - name: Upload artifact tarball
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ needs.version.outputs.build_name }}.tar.xz
+          path: build/${{ needs.version.outputs.build_name }}.tar.xz
+          if-no-files-found: error
+
+      - name: Upload artifact checksum
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ needs.version.outputs.build_name }}.sha512sum
+          path: build/${{ needs.version.outputs.build_name }}.sha512sum
+          if-no-files-found: error
+
+      - name: Upload build-info
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ needs.version.outputs.build_name }}.build-info.txt
+          path: build/${{ needs.version.outputs.build_name }}.build-info.txt
+          if-no-files-found: error
+
+  # Smoke (same spirit as CachyOS _job_test.yml).
+  # umu-run cmd.exe only proves the compat tool launches — it does NOT load
+  # winepipewire.drv. Driver presence is gated by pre-build + post-build asserts
+  # on the build job. Product audio path remains unverified here.
+  #
+  # TODO (ideal future step, not implemented): mmdevapi render smoke against a
+  # private PipeWire daemon inside the runner, e.g.:
+  #   - apt install pipewire wireplumber pipewire-pulse / or build minimal pw
+  #   - XDG_RUNTIME_DIR=... pipewire & wireplumber &  (null sink / dummy driver)
+  #   - WINEDEBUG=+pipewire PROTON_LOG=1 umu-run a tiny mmdevapi render EXE
+  #     (or wine's mmdevapi test) and grep the log for winepipewire init +
+  #     stream connect; fail if pulse/alsa backend was selected instead.
+  # Headless PW+session is flaky on GHA; keep this as a follow-up, not a gate.
+  smoke:
+    name: Smoke umu
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap python3-venv
+
+      - name: Download tarball
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.version.outputs.build_name }}.tar.xz
+
+      - name: umu + extract + run
+        run: |
+          set -euo pipefail
+          # Pin umu-launcher (was unpinned HEAD). SHA == tag 1.4.2.rc0 as of 2026-07-20.
+          git clone --depth=1 \
+            --branch 1.4.2.rc0 \
+            https://github.com/Open-Wine-Components/umu-launcher.git
+          # Expected tip: 0b17996174fed0691022d11a5cbcb4f6583738de
+          test "$(git -C umu-launcher rev-parse HEAD)" = "0b17996174fed0691022d11a5cbcb4f6583738de"
+          python3 -m venv umu-launcher/venv
+          # shellcheck disable=SC1091
+          source umu-launcher/venv/bin/activate
+          pip3 install -e umu-launcher
+          tar -xJf "${{ needs.version.outputs.build_name }}.tar.xz"
+          # Prefer tree root matching build_name; else first top-level dir.
+          if [[ -d "${{ needs.version.outputs.build_name }}" ]]; then
+            proton_dir="${{ needs.version.outputs.build_name }}"
+          else
+            proton_dir=$(find . -mindepth 1 -maxdepth 1 -type d ! -name umu-launcher | head -1)
+          fi
+          test -f "${proton_dir}/build-info.txt"
+          grep -q "wine_sha=${{ needs.build.outputs.wine_sha }}" "${proton_dir}/build-info.txt"
+          cat "${proton_dir}/build-info.txt" >> "$GITHUB_STEP_SUMMARY"
+          export WINEPREFIX="${HOME}/testpfx"
+          export PROTONPATH="$PWD/${proton_dir}"
+          umu-run cmd.exe /c echo "pipewire-proton-ok"
+
+  release:
+    name: GitHub Release
+    needs: [version, build, smoke]
+    if: needs.version.outputs.do_release == 'true'
+    runs-on: ubuntu-slim
+    # Only job that creates tags / uploads release assets.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ needs.version.outputs.build_name }}.*
+          merge-multiple: true
+
+      - name: Ensure tag + prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.release_tag }}
+          NAME: ${{ needs.version.outputs.build_name }}
+          WINE_SHA: ${{ needs.build.outputs.wine_sha }}
+          WINE_SOURCE: ${{ needs.build.outputs.wine_source }}
+          PROTON_SHA: ${{ needs.build.outputs.proton_sha }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "$TAG"
+            git push origin "refs/tags/$TAG"
+          fi
+
+          notes_file=$(mktemp)
+          {
+            echo "Test build with winepipewire.drv (fixed main-loop lineage)."
+            echo ""
+            echo "Extract under \`~/.steam/root/compatibilitytools.d/\` and restart Steam."
+            echo ""
+            echo "## Build metadata"
+            echo ""
+            if [[ -f "${NAME}.build-info.txt" ]]; then
+              echo '```'
+              cat "${NAME}.build-info.txt"
+              echo '```'
+            else
+              echo "- proton_sha: \`${PROTON_SHA}\`"
+              echo "- wine_sha: \`${WINE_SHA}\` (${WINE_SOURCE})"
+            fi
+          } > "$notes_file"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists — refreshing notes"
+            gh release edit "$TAG" --notes-file "$notes_file"
+          else
+            gh release create "$TAG" \
+              --prerelease \
+              --title "Proton-CachyOS-PipeWire $TAG" \
+              --notes-file "$notes_file"
+          fi
+
+      - name: Upload assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.release_tag }}
+          NAME: ${{ needs.version.outputs.build_name }}
+        run: |
+          set -euo pipefail
+          assets=("${NAME}.tar.xz" "${NAME}.sha512sum")
+          if [[ -f "${NAME}.build-info.txt" ]]; then
+            assets+=("${NAME}.build-info.txt")
+          fi
+          gh release upload "$TAG" "${assets[@]}" --clobber
