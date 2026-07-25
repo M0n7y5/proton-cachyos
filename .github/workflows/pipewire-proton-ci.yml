@@ -328,8 +328,11 @@ jobs:
         with:
           path: ~/.ccache
           key: ccache-pw-proton-${{ steps.ccache-id.outputs.checksum }}-${{ github.run_id }}
+          # Exact checksum prefix first; then broader SteamRT-only prefix
+          # (drops wine_sha-bearing checksum). ccache validates object compat.
           restore-keys: |
             ccache-pw-proton-${{ steps.ccache-id.outputs.checksum }}-
+            ccache-pw-proton-
 
       - name: Make redist
         working-directory: build
