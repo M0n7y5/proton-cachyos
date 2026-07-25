@@ -40,6 +40,18 @@ on:
         description: 'Tag name when publish_release=true (e.g. pipewire-11.0-20260720-slr)'
         type: string
         default: ''
+      runner:
+        description: >-
+          Build job runner label. Default: Ubicloud 30 vCPU x64
+          (ubicloud-standard-30; premium fleet is account-default since mid-2026).
+          ubicloud-standard-16 is mid-tier; ubuntu-24.04 is free GitHub-hosted fallback.
+        type: choice
+        required: false
+        default: ubicloud-standard-30
+        options:
+          - ubicloud-standard-30
+          - ubicloud-standard-16
+          - ubuntu-24.04
   # Tag pushes always use the submodule pin (no wine_sha input on push events).
   push:
     tags:
@@ -129,13 +141,16 @@ jobs:
   build:
     name: Build x86_64
     needs: version
-    runs-on: ubuntu-24.04
+    # workflow_dispatch supplies inputs.runner; tag-push has no inputs → free GHA.
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
     outputs:
       wine_sha: ${{ steps.wine-pin.outputs.wine_sha }}
       wine_source: ${{ steps.wine-pin.outputs.wine_source }}
       proton_sha: ${{ steps.wine-pin.outputs.proton_sha }}
     steps:
       - name: Debloat GitHub runner
+        # Free GHA ~14GB usable; Ubicloud 300–400GB — skip GitHub-image debloat there.
+        if: ${{ !startsWith(inputs.runner || 'ubuntu-24.04', 'ubicloud') }}
         # Third-party: pin full commit SHA (tag v3 → v3.2.2 peel).
         uses: endersonmenezes/free-disk-space@7901478139cff6e9d44df5972fd8ab8fcade4db1 # v3.2.2
         with:
