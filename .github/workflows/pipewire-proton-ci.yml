@@ -152,6 +152,15 @@ jobs:
       wine_sha: ${{ steps.wine-pin.outputs.wine_sha }}
       wine_source: ${{ steps.wine-pin.outputs.wine_source }}
       proton_sha: ${{ steps.wine-pin.outputs.proton_sha }}
+    # Single source of truth for the build identity the ccache key hashes.
+    # Mirrors _job_build.yml, where inputs.cflags/inputs.configure feed both the
+    # Configure step and the cache checksum, so the two cannot drift apart.
+    env:
+      PROTON_TARGET_ARCH: x86_64
+      # Match the CachyOS/Nello snapshot x86_64 cell.
+      PROTON_CFLAGS: -O3 -march=nocona -mtune=core-avx2
+      PROTON_RUSTFLAGS: -Copt-level=3 -Ctarget-cpu=nocona
+      PROTON_CONFIGURE: --enable-ccache
     steps:
       - name: Debloat GitHub runner
         # Free GHA ~14GB usable; Ubicloud 300–400GB — skip GitHub-image debloat there.
@@ -343,44 +352,51 @@ jobs:
       - name: Configure
         working-directory: build
         env:
-          # Match CachyOS/Nello snapshot x86_64 cell.
-          CFLAGS: -O3 -march=nocona -mtune=core-avx2
-          RUSTFLAGS: -Copt-level=3 -Ctarget-cpu=nocona
+          CFLAGS: ${{ env.PROTON_CFLAGS }}
+          RUSTFLAGS: ${{ env.PROTON_RUSTFLAGS }}
           USE_LTO: 0
         run: |
+          set -euo pipefail
+          # PROTON_CONFIGURE is a deliberate argument list — leave it unquoted.
           ../configure.sh \
             --build-name=${{ needs.version.outputs.build_name }} \
             --container-engine=docker \
-            --enable-ccache
+            ${PROTON_CONFIGURE}
           # Official _job_build.yml parity: dump the generated Makefile so the
           # SDK image and vendored-dep (ffmpeg/gstreamer/vkd3d) targets are in
           # the log next to the configure output.
           cat Makefile
-          # Prove steamrt image selection (also used for cache key).
-          make get-steamrt-image
 
       - name: Cache identifier
         working-directory: build
         id: ccache-id
         run: |
+          set -euo pipefail
+          # _job_build.yml formula: sha1 of the SteamRT SDK image string plus the
+          # configure-relevant build identity. The image string only exists after
+          # configure, so read it back from the generated Makefile rather than
+          # hardcoding a tag. RUSTFLAGS is excluded on purpose: ccache covers the
+          # C/C++ objects only, and official hashes cflags + configure likewise.
           image=$(make get-steamrt-image | tail -1)
-          # Include wine SHA so driver-branch builds do not thrash pin caches incorrectly.
-          checksum=$(echo "$image x86_64-pipewire-v1 ${{ steps.wine-pin.outputs.wine_sha }}" | sha1sum | cut -d' ' -f1)
-          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+          test -n "$image"
+          base_hash=$(echo "$image $PROTON_TARGET_ARCH $PROTON_CFLAGS $PROTON_CONFIGURE" | sha1sum | cut -d' ' -f1)
           echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "base_hash=$base_hash" >> "$GITHUB_OUTPUT"
           echo "image=$image"
+          echo "base_hash=$base_hash"
 
       - name: Restore ccache
         id: ccache-restore
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.ccache
-          key: ccache-pw-proton-${{ steps.ccache-id.outputs.checksum }}-${{ github.run_id }}
-          # Exact checksum prefix first; then broader SteamRT-only prefix
-          # (drops wine_sha-bearing checksum). ccache validates object compat.
+          key: ccache-pw-proton-${{ steps.ccache-id.outputs.base_hash }}-${{ steps.wine-pin.outputs.wine_sha }}-${{ github.run_id }}
+          # Toolchain-scoped only: same wine tree first, then any wine tree built
+          # with the same SDK image + arch + cflags/configure. Nothing broader —
+          # a universal prefix can restore objects from a different SDK image.
           restore-keys: |
-            ccache-pw-proton-${{ steps.ccache-id.outputs.checksum }}-
-            ccache-pw-proton-
+            ccache-pw-proton-${{ steps.ccache-id.outputs.base_hash }}-${{ steps.wine-pin.outputs.wine_sha }}-
+            ccache-pw-proton-${{ steps.ccache-id.outputs.base_hash }}-
 
       - name: Make redist
         working-directory: build
