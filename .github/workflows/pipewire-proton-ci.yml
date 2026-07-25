@@ -644,9 +644,17 @@ jobs:
   #      ("Google-Edge-Cache ... Error: 118") from any client; upstream commit
   #      fb9912e239fd6c55f3d51b8392077c090807e9f1 (2026-07-24) switched to
   #      /steamrt4/images/latest-public-beta.txt, which answers 200. The pin
-  #      below now carries that fix. Kept non-gating anyway: the official
-  #      _job_test.yml is wired with continue: true for the same reason, and a
-  #      third-party CDN must never decide whether our driver build is good.
+  #      below now carries that fix, and run 30166266466 got as far as a
+  #      downloaded, mtree-verified steamrt4 before dying one step later in
+  #      pressure-vessel-wrap: "bwrap: setting up uid map: Permission denied".
+  #      ubuntu-24.04 blocks unprivileged user namespaces unless a bwrap
+  #      AppArmor profile is loaded, so the step now runs the same host prep
+  #      as the official _job_test.yml "Update host" step. With the pin fix
+  #      and that profile the step is expected to go green. It stays
+  #      non-gating regardless, because it rides on third-party infra
+  #      (repo.steampowered.com and the umu repo) that must never decide
+  #      whether our driver build is good; official wires its test job with
+  #      continue: true for the same reason.
   #
   # Neither layer loads winepipewire.drv against a live daemon, so the product
   # audio path stays unverified here; presence is what we gate on.
@@ -754,15 +762,26 @@ jobs:
             echo "- \`winepipewire.so\` present for x86_64-unix and i386-unix"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Best effort only: see the CDN url note above.
+      # Non-gating by design rather than expected to fail: see the note above.
+      # continue-on-error mirrors official _job_test.yml's continue: true.
       - name: umu end to end (best effort)
         continue-on-error: true
         env:
           PROTON_ROOT: ${{ steps.extract.outputs.root }}
         run: |
           set -euo pipefail
+          # Host prep from the official _job_test.yml "Update host" step.
+          # ubuntu-24.04 ships kernel.apparmor_restrict_unprivileged_userns=1,
+          # so pressure-vessel's bwrap cannot write a uid map until the
+          # bwrap-userns-restrict profile from apparmor-profiles-extra is
+          # parsed in. Two deliberate deviations from official: -y, because
+          # this step runs under set -euo pipefail and apt-get would otherwise
+          # abort on its confirmation prompt, and python3-venv, which official
+          # gets from its own venv step.
           sudo apt-get update
-          sudo apt-get install -y bubblewrap python3-venv
+          echo "deb http://archive.ubuntu.com/ubuntu/ noble noble-updates noble-backports main universe restricted multiverse" | sudo tee -a /etc/apt/sources.list
+          sudo apt-get install -y bubblewrap apparmor apparmor-profiles apparmor-profiles-extra python3-venv
+          sudo apparmor_parser /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
           # Pinned, never tracked as a branch: official clones -b main, we keep
           # reproducibility. SHA == tag 1.4.4, the newest release (2026-07-25),
           # and it contains fb9912e239fd6c55f3d51b8392077c090807e9f1,
