@@ -384,7 +384,24 @@ jobs:
           echo "base_hash=$base_hash" >> "$GITHUB_OUTPUT"
           echo "image=$image"
           echo "base_hash=$base_hash"
+          # actions/cache saves ~/.ccache, and Makefile.in only falls back to
+          # $(HOME)/.ccache when CCACHE_DIR is unset (it also forwards every
+          # CCACHE_* host var into the container). If anything in the runner
+          # environment moves that path, the container fills a directory the
+          # cache step never sees and every run silently starts cold.
+          ccache_dir="${CCACHE_DIR:-${HOME}/.ccache}"
+          if [[ "$ccache_dir" != "${HOME}/.ccache" ]]; then
+            echo "::error::CCACHE_DIR=${ccache_dir} does not match the cached path ${HOME}/.ccache"
+            exit 1
+          fi
+          echo "ccache_dir=${ccache_dir}"
 
+      # Ubicloud runners serve actions/cache through their own transparent cache
+      # proxy, so entries never show up in GitHub's /actions/caches API or in the
+      # repo cache usage totals. Run 30162478567 saved 568 MB under key
+      # ccache-pw-proton-19f5ccea...-1ba4fa16...-30162478567 while that API
+      # reported zero entries. Caches are per backend: an ubicloud run and an
+      # ubuntu-24.04 run never share one.
       - name: Restore ccache
         id: ccache-restore
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -401,6 +418,37 @@ jobs:
       - name: Make redist
         working-directory: build
         run: make redist
+
+      - name: Report ccache
+        if: always()
+        env:
+          STEAMRT_IMAGE: ${{ steps.ccache-id.outputs.image }}
+        run: |
+          set -euo pipefail
+          dir="${HOME}/.ccache"
+          if [[ ! -d "$dir" ]]; then
+            echo "::warning::${dir} does not exist, so the save step has nothing to upload"
+            exit 0
+          fi
+          size=$(du -sh "$dir" | cut -f1)
+          files=$(find "$dir" -type f | wc -l)
+          echo "ccache dir ${dir}: ${size}, ${files} files"
+          if [[ "$files" -eq 0 ]]; then
+            echo "::warning::ccache directory is empty; check ENABLE_CCACHE and the container bind mount"
+          fi
+          # The SDK image ships its own ccache and the host binary may be older,
+          # so stats are best effort and never fail the job.
+          CCACHE_DIR="$dir" ccache --show-stats 2>&1 | head -30 || true
+          {
+            echo ""
+            echo "### ccache"
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| dir | \`${dir}\` |"
+            echo "| size | ${size} |"
+            echo "| files | ${files} |"
+            echo "| sdk image | \`${STEAMRT_IMAGE}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Assert winepipewire.so in redist + write build-info
         id: build-info
