@@ -535,37 +535,136 @@ jobs:
           path: build/${{ needs.version.outputs.build_name }}.build-info.txt
           if-no-files-found: error
 
-  # Smoke (same spirit as CachyOS _job_test.yml).
-  # umu-run cmd.exe only proves the compat tool launches - it does NOT load
-  # winepipewire.drv. Driver presence is gated by pre-build + post-build asserts
-  # on the build job. Product audio path remains unverified here.
+  # Smoke gate, two layers:
+  #
+  #   1. Wine smoke (required, dependency-free). Unpacks the redist and drives
+  #      files/bin/wine straight from the tree: no Steam runtime, no container,
+  #      no network. That keeps driver CI independent of third-party CDNs.
+  #
+  #   2. umu-launcher end to end (best effort, continue-on-error). umu fetches
+  #      the steamrt4 platform from repo.steampowered.com, which answers 403 to
+  #      GitHub/Azure runner egress IPs. Run 30162478567 logged
+  #      "ERROR: repo.steampowered.com returned the status: 403",
+  #      "CRITICAL: Could not find steamrt4_platform_* in .../umu/steamrt4" and
+  #      then FileNotFoundError on toolmanifest.vdf. Keep it running so it
+  #      reports again if Valve unblocks those ranges or the job moves to a
+  #      runner with different egress, but never let it gate the build.
+  #
+  # Neither layer loads winepipewire.drv against a live daemon, so the product
+  # audio path stays unverified here; presence is what we gate on.
   #
   # TODO (ideal future step, not implemented): mmdevapi render smoke against a
   # private PipeWire daemon inside the runner, e.g.:
   #   - apt install pipewire wireplumber pipewire-pulse / or build minimal pw
   #   - XDG_RUNTIME_DIR=... pipewire & wireplumber &  (null sink / dummy driver)
-  #   - WINEDEBUG=+pipewire PROTON_LOG=1 umu-run a tiny mmdevapi render EXE
+  #   - WINEDEBUG=+pipewire PROTON_LOG=1 run a tiny mmdevapi render EXE
   #     (or wine's mmdevapi test) and grep the log for winepipewire init +
   #     stream connect; fail if pulse/alsa backend was selected instead.
   # Headless PW+session is flaky on GHA; keep this as a follow-up, not a gate.
   smoke:
-    name: Smoke umu
+    name: Smoke wine
     needs: [version, build]
     runs-on: ubuntu-24.04
+    env:
+      BUILD_NAME: ${{ needs.version.outputs.build_name }}
+      WINE_SHA: ${{ needs.build.outputs.wine_sha }}
     steps:
-      - name: Host packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap python3-venv
-
       - name: Download tarball
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.version.outputs.build_name }}.tar.xz
 
-      - name: umu + extract + run
+      - name: Extract redist
+        id: extract
         run: |
           set -euo pipefail
+          tar -xJf "${BUILD_NAME}.tar.xz"
+          # Prefer tree root matching build_name; else first top-level dir.
+          if [[ -d "$BUILD_NAME" ]]; then
+            root="$BUILD_NAME"
+          else
+            root=$(find . -mindepth 1 -maxdepth 1 -type d | head -1)
+          fi
+          test -n "$root"
+          # Provenance: the artifact must carry the wine sha the build job resolved.
+          test -f "${root}/build-info.txt"
+          grep -q "wine_sha=${WINE_SHA}" "${root}/build-info.txt"
+          echo "root=${PWD}/${root}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### build-info.txt (from artifact)"
+            echo '```'
+            cat "${root}/build-info.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wine smoke
+        env:
+          PROTON_ROOT: ${{ steps.extract.outputs.root }}
+        run: |
+          set -euo pipefail
+
+          # End-of-chain driver proof: cheap and redundant with the build job's
+          # assert, but it checks the artifact testers actually download.
+          for so in x86_64-unix i386-unix; do
+            path="${PROTON_ROOT}/files/lib/wine/${so}/winepipewire.so"
+            if [[ ! -s "$path" ]]; then
+              echo "::error::redist artifact has no ${so}/winepipewire.so"
+              find "${PROTON_ROOT}/files/lib/wine" -iname '*pipewire*' || true
+              exit 1
+            fi
+            echo "OK: files/lib/wine/${so}/winepipewire.so ($(wc -c < "$path") bytes)"
+          done
+
+          wine="${PROTON_ROOT}/files/bin/wine"
+          test -x "$wine"
+          missing=$(ldd "$wine" | grep 'not found' || true)
+          if [[ -n "$missing" ]]; then
+            echo "::error::files/bin/wine has unresolved libraries on a bare runner:"
+            echo "$missing"
+            exit 1
+          fi
+
+          # Bare-metal wine, no pressure-vessel: WINEPREFIX plus dll overrides
+          # is all the redist layout needs. mscoree/mshtml are disabled so
+          # wineboot never reaches for mono/gecko over the network.
+          export WINEPREFIX="${RUNNER_TEMP}/pipewire-smoke-pfx"
+          export WINEDLLOVERRIDES="mscoree,mshtml="
+          export WINEDEBUG=-all
+          rm -rf "$WINEPREFIX"
+
+          version=$("$wine" --version)
+          echo "wine --version: ${version}"
+          test -n "$version"
+
+          timeout 600 "$wine" wineboot -i
+          timeout 120 "${PROTON_ROOT}/files/bin/wineserver" -w || true
+
+          for want in system.reg user.reg drive_c/windows/system32; do
+            if [[ ! -e "${WINEPREFIX}/${want}" ]]; then
+              echo "::error::wineboot -i left no ${want} in the scratch prefix"
+              ls -la "$WINEPREFIX" || true
+              exit 1
+            fi
+          done
+          echo "OK: scratch prefix booted ($(wc -c < "${WINEPREFIX}/system.reg") byte system.reg)"
+
+          {
+            echo ""
+            echo "### Wine smoke (dependency-free)"
+            echo "- \`files/bin/wine --version\` -> \`${version}\`"
+            echo "- \`wineboot -i\` created \`system.reg\`, \`user.reg\`, \`drive_c/windows/system32\`"
+            echo "- \`winepipewire.so\` present for x86_64-unix and i386-unix"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Best effort only: see the Valve CDN 403 note above.
+      - name: umu end to end (best effort)
+        continue-on-error: true
+        env:
+          PROTON_ROOT: ${{ steps.extract.outputs.root }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap python3-venv
           # Pin umu-launcher (was unpinned HEAD). SHA == tag 1.4.2.rc0 as of 2026-07-20.
           git clone --depth=1 \
             --branch 1.4.2.rc0 \
@@ -576,18 +675,8 @@ jobs:
           # shellcheck disable=SC1091
           source umu-launcher/venv/bin/activate
           pip3 install -e umu-launcher
-          tar -xJf "${{ needs.version.outputs.build_name }}.tar.xz"
-          # Prefer tree root matching build_name; else first top-level dir.
-          if [[ -d "${{ needs.version.outputs.build_name }}" ]]; then
-            proton_dir="${{ needs.version.outputs.build_name }}"
-          else
-            proton_dir=$(find . -mindepth 1 -maxdepth 1 -type d ! -name umu-launcher | head -1)
-          fi
-          test -f "${proton_dir}/build-info.txt"
-          grep -q "wine_sha=${{ needs.build.outputs.wine_sha }}" "${proton_dir}/build-info.txt"
-          cat "${proton_dir}/build-info.txt" >> "$GITHUB_STEP_SUMMARY"
-          export WINEPREFIX="${HOME}/testpfx"
-          export PROTONPATH="$PWD/${proton_dir}"
+          export WINEPREFIX="${RUNNER_TEMP}/umu-pfx"
+          export PROTONPATH="${PROTON_ROOT}"
           umu-run cmd.exe /c echo "pipewire-proton-ok"
 
   release:
