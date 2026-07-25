@@ -62,7 +62,7 @@ on:
   #   types: [build-proton-with-wine]
 
 concurrency:
-  group: pw-proton-${{ github.ref_name }}-${{ inputs.wine_sha || 'pin' }}
+  group: pw-proton-${{ github.ref_name }}-${{ inputs.wine_sha || 'pin' }}-${{ inputs.runner || 'default' }}
   cancel-in-progress: true
 
 # Least privilege default: jobs only get a read-capable GITHUB_TOKEN.
