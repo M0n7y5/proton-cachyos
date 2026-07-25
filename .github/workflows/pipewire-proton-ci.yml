@@ -590,13 +590,18 @@ jobs:
   #      no network. That keeps driver CI independent of third-party CDNs.
   #
   #   2. umu-launcher end to end (best effort, continue-on-error). umu fetches
-  #      the steamrt4 platform from repo.steampowered.com, which answers 403 to
-  #      GitHub/Azure runner egress IPs. Run 30162478567 logged
-  #      "ERROR: repo.steampowered.com returned the status: 403",
-  #      "CRITICAL: Could not find steamrt4_platform_* in .../umu/steamrt4" and
-  #      then FileNotFoundError on toolmanifest.vdf. Keep it running so it
-  #      reports again if Valve unblocks those ranges or the job moves to a
-  #      runner with different egress, but never let it gate the build.
+  #      the steamrt4 platform from repo.steampowered.com. Run 30162478567
+  #      logged "ERROR: repo.steampowered.com returned the status: 403" and
+  #      then FileNotFoundError on toolmanifest.vdf. That was not IP filtering:
+  #      Valve stopped serving the directory-style version path, and our pinned
+  #      umu still asked for it. umu 1.4.2.rc0 requested
+  #      /steamrt4/images/latest-public-beta/VERSION.txt, which now answers 403
+  #      ("Google-Edge-Cache ... Error: 118") from any client; upstream commit
+  #      fb9912e239fd6c55f3d51b8392077c090807e9f1 (2026-07-24) switched to
+  #      /steamrt4/images/latest-public-beta.txt, which answers 200. The pin
+  #      below now carries that fix. Kept non-gating anyway: the official
+  #      _job_test.yml is wired with continue: true for the same reason, and a
+  #      third-party CDN must never decide whether our driver build is good.
   #
   # Neither layer loads winepipewire.drv against a live daemon, so the product
   # audio path stays unverified here; presence is what we gate on.
@@ -704,7 +709,7 @@ jobs:
             echo "- \`winepipewire.so\` present for x86_64-unix and i386-unix"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Best effort only: see the Valve CDN 403 note above.
+      # Best effort only: see the CDN url note above.
       - name: umu end to end (best effort)
         continue-on-error: true
         env:
@@ -713,12 +718,17 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y bubblewrap python3-venv
-          # Pin umu-launcher (was unpinned HEAD). SHA == tag 1.4.2.rc0 as of 2026-07-20.
+          # Pinned, never tracked as a branch: official clones -b main, we keep
+          # reproducibility. SHA == tag 1.4.4, the newest release (2026-07-25),
+          # and it contains fb9912e239fd6c55f3d51b8392077c090807e9f1,
+          # "umu_runtime: use cdn-friendly version file url" (1.4.3 carries it
+          # too). The previous pin 1.4.2.rc0 predates the fix and 403s against
+          # repo.steampowered.com.
           git clone --depth=1 \
-            --branch 1.4.2.rc0 \
+            --branch 1.4.4 \
             https://github.com/Open-Wine-Components/umu-launcher.git
-          # Expected tip: 0b17996174fed0691022d11a5cbcb4f6583738de
-          test "$(git -C umu-launcher rev-parse HEAD)" = "0b17996174fed0691022d11a5cbcb4f6583738de"
+          # Expected tip: cf3d1b107147480c447ffbfb3f789dc74335074c
+          test "$(git -C umu-launcher rev-parse HEAD)" = "cf3d1b107147480c447ffbfb3f789dc74335074c"
           python3 -m venv umu-launcher/venv
           # shellcheck disable=SC1091
           source umu-launcher/venv/bin/activate
