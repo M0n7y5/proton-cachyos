@@ -11,6 +11,9 @@
 # Prerequisites on the fork:
 #   - dispatch override SHAs exist in CachyOS/wine-cachyos or
 #     M0n7y5/wine-cachyos (the resolver checks both immutable sources)
+#   - dispatch override SHAs CONTAIN the tree's wine submodule pin: the proton
+#     tree pins ffmpeg/gstreamer/vkd3d in lockstep with wine, and the official
+#     pipeline only ever builds that pin (see the gate in "Resolve wine SHA")
 #   - Makefile.in already has --with-pipewire + steamrtdeps/build-pipewire.mk
 #     (true on CachyOS/Nello proton 11.0 trees — do not re-add blindly)
 #   - Remove obsolete patches/wine/*PROTON_PW_RT* if the tree no longer
@@ -27,7 +30,9 @@ on:
       wine_sha:
         description: >-
           Full 40-char immutable wine-cachyos commit SHA to build.
-          Empty = use the proton repo's wine submodule pin.
+          Must contain the proton tree's wine submodule pin (rebase your branch
+          onto it first) — older/divergent wine breaks against the tree's
+          vendored ffmpeg. Empty = use the proton repo's wine submodule pin.
           (Future: repository_dispatch from wine-side CI can supply the same SHA.)
         type: string
         required: false
@@ -228,12 +233,16 @@ jobs:
               echo "::error::wine_sha must be full 40-char lowercase hex (got: ${override})"
               exit 1
             fi
+            # No --depth=1: the lockstep gate below needs a real commit graph,
+            # and a shallow graft makes `merge-base --is-ancestor` answer "no".
+            # The submodule clone is blobless (--filter=tree:0), so a full-history
+            # fetch only adds commit metadata the pin does not already carry.
             echo "Fetching immutable wine ${override} from configured submodule URL: ${wine_url}"
-            if git -C "$wine_path" fetch --depth=1 "$wine_url" "$override"; then
+            if git -C "$wine_path" fetch --no-tags "$wine_url" "$override"; then
               fetched_url="$wine_url"
             else
               echo "::warning::SHA not served by configured submodule URL; trying ${wine_fallback_url}"
-              if ! git -C "$wine_path" fetch --depth=1 "$wine_fallback_url" "$override"; then
+              if ! git -C "$wine_path" fetch --no-tags "$wine_fallback_url" "$override"; then
                 echo "::error::wine ${override} is unavailable from both ${wine_url} and ${wine_fallback_url}"
                 exit 1
               fi
@@ -245,6 +254,26 @@ jobs:
               echo "::error::fetched wine object ${got} != requested ${override}"
               exit 1
             fi
+
+            # Lockstep gate. The proton tree pins its vendored dependencies
+            # (ffmpeg, gstreamer, vkd3d, ...) in step with the wine submodule,
+            # and the official pipeline only ever builds that pin — so a wine
+            # tree that does not contain the pin is an unsupported pairing.
+            # Run 30159382825 dispatched wine 6cab070d (topic branch off the
+            # older cachyos_11.0_release line, still carrying mediaconv-era
+            # dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c written for
+            # the pre-6.x FFmpeg API) against this tree's FFmpeg master pin
+            # f46e5144, and died ~21 min into `make redist`. Reject in seconds.
+            if ! git -C "$wine_path" merge-base --is-ancestor "$pin_sha" "$override"; then
+              echo "::error::wine ${override} does not contain the proton tree's wine submodule pin ${pin_sha}"
+              if git -C "$wine_path" merge-base --is-ancestor "$override" "$pin_sha"; then
+                echo "::error::the pin already contains ${override} — dispatch with an empty wine_sha to build it"
+              else
+                echo "::error::rebase the wine branch onto ${pin_sha} before dispatching it"
+              fi
+              exit 1
+            fi
+            echo "OK: ${override} contains wine submodule pin ${pin_sha}"
             git -C "$wine_path" checkout --detach --force "$override"
             wine_sha=$(git -C "$wine_path" rev-parse HEAD)
             if [[ "$wine_sha" != "$override" ]]; then
@@ -323,6 +352,10 @@ jobs:
             --build-name=${{ needs.version.outputs.build_name }} \
             --container-engine=docker \
             --enable-ccache
+          # Official _job_build.yml parity: dump the generated Makefile so the
+          # SDK image and vendored-dep (ffmpeg/gstreamer/vkd3d) targets are in
+          # the log next to the configure output.
+          cat Makefile
           # Prove steamrt image selection (also used for cache key).
           make get-steamrt-image
 
