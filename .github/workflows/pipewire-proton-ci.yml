@@ -2,8 +2,9 @@
 # Drop into: .github/workflows/pipewire-proton-ci.yml
 #
 # Based on NelloKudo/proton-cachyos + CachyOS/proton-cachyos
-# (_job_build.yml / snapshot.yml / release.yml), slimmed to one
-# x86_64 redist for free GitHub-hosted runners.
+# (_job_build.yml / snapshot.yml / release.yml), slimmed to one x86_64
+# redist cell (baseline or x86-64-v3, see the `variant` input) for free
+# GitHub-hosted runners.
 #
 # Purpose: build Proton against a chosen wine-cachyos SHA (driver CI for
 # _upstream_pipewire work), not only the submodule pin in the proton tree.
@@ -20,7 +21,7 @@
 #     enables PW_STREAM_FLAG_RT_PROCESS by default
 #
 # [FACT] pattern validated by Nello run 29689279331 and CachyOS proton CI.
-# [EST]  single x86_64 cell: ~2.5-3.5h cold, ~25-45m warm with ccache.
+# [EST]  single build cell: ~2.5-3.5h cold, ~25-45m warm with ccache.
 
 name: Proton-CachyOS-PipeWire
 
@@ -37,6 +38,19 @@ on:
         type: string
         required: false
         default: ''
+      variant:
+        description: >-
+          Micro-architecture of the single build cell, taken verbatim from the
+          official snapshot.yml matrix. x86_64 is the baseline cell
+          (-march=nocona); x86_64_v3 is the x86-64-v3 cell. Both official cells
+          share the same rustflags and carry no extra configure argument, so
+          this only switches CFLAGS and the -<variant> suffix on the build name.
+        type: choice
+        required: false
+        default: x86_64_v3
+        options:
+          - x86_64
+          - x86_64_v3
       publish_release:
         description: 'Create/update a GitHub prerelease and upload the tarball'
         type: boolean
@@ -57,7 +71,10 @@ on:
           - ubicloud-standard-30
           - ubicloud-standard-16
           - ubuntu-24.04
-  # Tag pushes always use the submodule pin (no wine_sha input on push events).
+  # Tag pushes always use the submodule pin (no wine_sha input on push events)
+  # and build x86_64_v3: push events carry no inputs at all, so PROTON_VARIANT
+  # below falls back to the same value a plain dispatch defaults to. Dispatch
+  # variant=x86_64 explicitly when a baseline build is wanted.
   push:
     tags:
       - 'pipewire-*-*-slr'
@@ -67,7 +84,7 @@ on:
   #   types: [build-proton-with-wine]
 
 concurrency:
-  group: pw-proton-${{ github.ref_name }}-${{ inputs.wine_sha || 'pin' }}-${{ inputs.runner || 'default' }}
+  group: pw-proton-${{ github.ref_name }}-${{ inputs.wine_sha || 'pin' }}-${{ inputs.variant || 'x86_64_v3' }}-${{ inputs.runner || 'default' }}
   cancel-in-progress: true
 
 # Least privilege default: jobs only get a read-capable GITHUB_TOKEN.
@@ -79,6 +96,10 @@ permissions:
 env:
   # Keep build name Steam-friendly (directory under compatibilitytools.d).
   BUILD_PREFIX: Proton-CachyOS-PipeWire
+  # Micro-architecture variant of our single build cell, mirroring the official
+  # snapshot.yml x86_64 / x86_64_v3 rows. Exported into every step, so the
+  # version job and the ccache guard read one value instead of re-deriving it.
+  PROTON_VARIANT: ${{ inputs.variant || 'x86_64_v3' }}
 
 jobs:
   version:
@@ -121,15 +142,15 @@ jobs:
 
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             tag="${{ github.ref_name }}"
-            build_name="${BUILD_PREFIX}-${tag}-x86_64"
+            build_name="${BUILD_PREFIX}-${tag}-${PROTON_VARIANT}"
             echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
             echo "do_release=true" >> "$GITHUB_OUTPUT"
           else
             tag="${{ inputs.release_tag }}"
             if [[ -n "$wine_sha_input" ]]; then
-              build_name="${BUILD_PREFIX}-${full_desc}-wine${wine_sha_input:0:8}-x86_64"
+              build_name="${BUILD_PREFIX}-${full_desc}-wine${wine_sha_input:0:8}-${PROTON_VARIANT}"
             else
-              build_name="${BUILD_PREFIX}-${full_desc}-x86_64"
+              build_name="${BUILD_PREFIX}-${full_desc}-${PROTON_VARIANT}"
             fi
             if [[ "${{ inputs.publish_release }}" == "true" && -n "$tag" ]]; then
               echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
@@ -142,9 +163,10 @@ jobs:
           echo "build_name=$build_name" >> "$GITHUB_OUTPUT"
           echo "build_name=$build_name"
           echo "wine_sha_input=${wine_sha_input:-<submodule pin>}"
+          echo "variant=${PROTON_VARIANT}"
 
   build:
-    name: Build x86_64
+    name: Build ${{ inputs.variant || 'x86_64_v3' }}
     needs: version
     # workflow_dispatch supplies inputs.runner; tag-push has no inputs → free GHA.
     runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
@@ -157,8 +179,13 @@ jobs:
     # Configure step and the cache checksum, so the two cannot drift apart.
     env:
       PROTON_TARGET_ARCH: x86_64
-      # Match the CachyOS/Nello snapshot x86_64 cell.
-      PROTON_CFLAGS: -O3 -march=nocona -mtune=core-avx2
+      # Match the CachyOS/Nello snapshot cell for this variant. Job-level env
+      # cannot read the env context, so the fallback is spelled out again here
+      # rather than reusing PROTON_VARIANT. Only -march differs between the two
+      # official rows: rustflags are byte-identical (upstream keeps
+      # -Ctarget-cpu=nocona on the v3 cell too) and neither row adds a
+      # configure argument, so PROTON_CONFIGURE stays variant-independent.
+      PROTON_CFLAGS: ${{ (inputs.variant || 'x86_64_v3') == 'x86_64_v3' && '-O3 -march=x86-64-v3 -mtune=core-avx2' || '-O3 -march=nocona -mtune=core-avx2' }}
       PROTON_RUSTFLAGS: -Copt-level=3 -Ctarget-cpu=nocona
       PROTON_CONFIGURE: --enable-ccache
     steps:
@@ -377,6 +404,24 @@ jobs:
           # configure, so read it back from the generated Makefile rather than
           # hardcoding a tag. RUSTFLAGS is excluded on purpose: ccache covers the
           # C/C++ objects only, and official hashes cflags + configure likewise.
+          # The variant reaches the hash through PROTON_CFLAGS (-march is the
+          # only thing the official x86_64 / x86_64_v3 rows disagree on), which
+          # is what keeps the two variants on separate cache entries. Assert it,
+          # because a variant whose -march never made it into CFLAGS would
+          # silently restore and then overwrite the other variant's objects.
+          case "$PROTON_VARIANT" in
+            x86_64)    want_march=-march=nocona ;;
+            x86_64_v3) want_march=-march=x86-64-v3 ;;
+            *)
+              echo "::error::unknown PROTON_VARIANT '${PROTON_VARIANT}'"
+              exit 1
+              ;;
+          esac
+          if [[ "$PROTON_CFLAGS" != *"$want_march"* ]]; then
+            echo "::error::variant ${PROTON_VARIANT} expects ${want_march}, but PROTON_CFLAGS is '${PROTON_CFLAGS}' - the ccache key would not separate variants"
+            exit 1
+          fi
+          echo "variant=${PROTON_VARIANT} (${want_march}) cflags='${PROTON_CFLAGS}'"
           image=$(make get-steamrt-image | tail -1)
           test -n "$image"
           base_hash=$(echo "$image $PROTON_TARGET_ARCH $PROTON_CFLAGS $PROTON_CONFIGURE" | sha1sum | cut -d' ' -f1)
