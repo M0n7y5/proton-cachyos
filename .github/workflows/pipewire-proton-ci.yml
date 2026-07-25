@@ -15,12 +15,12 @@
 #     tree pins ffmpeg/gstreamer/vkd3d in lockstep with wine, and the official
 #     pipeline only ever builds that pin (see the gate in "Resolve wine SHA")
 #   - Makefile.in already has --with-pipewire + steamrtdeps/build-pipewire.mk
-#     (true on CachyOS/Nello proton 11.0 trees — do not re-add blindly)
+#     (true on CachyOS/Nello proton 11.0 trees - do not re-add blindly)
 #   - Remove obsolete patches/wine/*PROTON_PW_RT* if the tree no longer
 #     enables PW_STREAM_FLAG_RT_PROCESS by default
 #
 # [FACT] pattern validated by Nello run 29689279331 and CachyOS proton CI.
-# [EST]  single x86_64 cell: ~2.5–3.5h cold, ~25–45m warm with ccache.
+# [EST]  single x86_64 cell: ~2.5-3.5h cold, ~25-45m warm with ccache.
 
 name: Proton-CachyOS-PipeWire
 
@@ -31,7 +31,7 @@ on:
         description: >-
           Full 40-char immutable wine-cachyos commit SHA to build.
           Must contain the proton tree's wine submodule pin (rebase your branch
-          onto it first) — older/divergent wine breaks against the tree's
+          onto it first) - older/divergent wine breaks against the tree's
           vendored ffmpeg. Empty = use the proton repo's wine submodule pin.
           (Future: repository_dispatch from wine-side CI can supply the same SHA.)
         type: string
@@ -163,7 +163,7 @@ jobs:
       PROTON_CONFIGURE: --enable-ccache
     steps:
       - name: Debloat GitHub runner
-        # Free GHA ~14GB usable; Ubicloud 300–400GB — skip GitHub-image debloat there.
+        # Free GHA ~14GB usable; Ubicloud 300-400GB - skip GitHub-image debloat there.
         if: ${{ !startsWith(inputs.runner || 'ubuntu-24.04', 'ubicloud') }}
         # Third-party: pin full commit SHA (tag v3 → v3.2.2 peel).
         uses: endersonmenezes/free-disk-space@7901478139cff6e9d44df5972fd8ab8fcade4db1 # v3.2.2
@@ -209,7 +209,7 @@ jobs:
           submodules: false
 
       # tree:0 keeps submodule blob download smaller (CachyOS/Nello pattern).
-      # Never use `git submodule update --remote` — non-reproducible moving tip.
+      # Never use `git submodule update --remote` - non-reproducible moving tip.
       - name: Submodules
         run: |
           set -euo pipefail
@@ -266,7 +266,7 @@ jobs:
 
             # Lockstep gate. The proton tree pins its vendored dependencies
             # (ffmpeg, gstreamer, vkd3d, ...) in step with the wine submodule,
-            # and the official pipeline only ever builds that pin — so a wine
+            # and the official pipeline only ever builds that pin - so a wine
             # tree that does not contain the pin is an unsupported pairing.
             # Run 30159382825 dispatched wine 6cab070d (topic branch off the
             # older cachyos_11.0_release line, still carrying mediaconv-era
@@ -276,7 +276,7 @@ jobs:
             if ! git -C "$wine_path" merge-base --is-ancestor "$pin_sha" "$override"; then
               echo "::error::wine ${override} does not contain the proton tree's wine submodule pin ${pin_sha}"
               if git -C "$wine_path" merge-base --is-ancestor "$override" "$pin_sha"; then
-                echo "::error::the pin already contains ${override} — dispatch with an empty wine_sha to build it"
+                echo "::error::the pin already contains ${override} - dispatch with an empty wine_sha to build it"
               else
                 echo "::error::rebase the wine branch onto ${pin_sha} before dispatching it"
               fi
@@ -326,7 +326,7 @@ jobs:
 
           # 1) Effective wine tree must contain winepipewire.drv at this SHA.
           if ! git -C "$wine_path" cat-file -e "${wine_sha}:dlls/winepipewire.drv/pipewire.c"; then
-            echo "::error::wine ${wine_sha} has no dlls/winepipewire.drv/pipewire.c — refusing to build a tree without the PipeWire driver source"
+            echo "::error::wine ${wine_sha} has no dlls/winepipewire.drv/pipewire.c - refusing to build a tree without the PipeWire driver source"
             exit 1
           fi
           echo "OK: ${wine_sha}:dlls/winepipewire.drv/pipewire.c present"
@@ -337,7 +337,7 @@ jobs:
             exit 1
           fi
           if ! grep -nE '^WINE_AUTOCONF_ARGS' -A120 Makefile.in | grep -qE -- '--with-pipewire'; then
-            echo "::error::Makefile.in WINE_AUTOCONF_ARGS is missing --with-pipewire — config would omit winepipewire.drv"
+            echo "::error::Makefile.in WINE_AUTOCONF_ARGS is missing --with-pipewire - config would omit winepipewire.drv"
             grep -nE 'WINE_AUTOCONF|pipewire' Makefile.in || true
             exit 1
           fi
@@ -357,7 +357,7 @@ jobs:
           USE_LTO: 0
         run: |
           set -euo pipefail
-          # PROTON_CONFIGURE is a deliberate argument list — leave it unquoted.
+          # PROTON_CONFIGURE is a deliberate argument list - leave it unquoted.
           ../configure.sh \
             --build-name=${{ needs.version.outputs.build_name }} \
             --container-engine=docker \
@@ -392,7 +392,7 @@ jobs:
           path: ~/.ccache
           key: ccache-pw-proton-${{ steps.ccache-id.outputs.base_hash }}-${{ steps.wine-pin.outputs.wine_sha }}-${{ github.run_id }}
           # Toolchain-scoped only: same wine tree first, then any wine tree built
-          # with the same SDK image + arch + cflags/configure. Nothing broader —
+          # with the same SDK image + arch + cflags/configure. Nothing broader -
           # a universal prefix can restore objects from a different SDK image.
           restore-keys: |
             ccache-pw-proton-${{ steps.ccache-id.outputs.base_hash }}-${{ steps.wine-pin.outputs.wine_sha }}-
@@ -433,7 +433,7 @@ jobs:
           so32="${root}/files/lib/wine/i386-unix/winepipewire.so"
           for so in "$so64" "$so32"; do
             if [[ ! -f "$so" ]]; then
-              echo "::error::missing ${so#${root}/} in redist — PipeWire driver was omitted from the build"
+              echo "::error::missing ${so#${root}/} in redist - PipeWire driver was omitted from the build"
               echo "Looking under ${root}/files/lib/wine:"
               find "${root}/files/lib/wine" -iname '*pipewire*' 2>/dev/null || true
               exit 1
@@ -536,7 +536,7 @@ jobs:
           if-no-files-found: error
 
   # Smoke (same spirit as CachyOS _job_test.yml).
-  # umu-run cmd.exe only proves the compat tool launches — it does NOT load
+  # umu-run cmd.exe only proves the compat tool launches - it does NOT load
   # winepipewire.drv. Driver presence is gated by pre-build + post-build asserts
   # on the build job. Product audio path remains unverified here.
   #
@@ -646,7 +646,7 @@ jobs:
           } > "$notes_file"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists — refreshing notes"
+            echo "Release $TAG exists - refreshing notes"
             gh release edit "$TAG" --notes-file "$notes_file"
           else
             gh release create "$TAG" \
