@@ -174,6 +174,11 @@ jobs:
       wine_sha: ${{ steps.wine-pin.outputs.wine_sha }}
       wine_source: ${{ steps.wine-pin.outputs.wine_source }}
       proton_sha: ${{ steps.wine-pin.outputs.proton_sha }}
+      # The audio gate has to enter the same SDK image the driver was compiled
+      # in, and that tag only exists after configure. Publish what the ccache
+      # identifier already read back out of the generated Makefile so the two
+      # jobs cannot drift onto different images.
+      steamrt_image: ${{ steps.ccache-id.outputs.image }}
     # Single source of truth for the build identity the ccache key hashes.
     # Mirrors _job_build.yml, where inputs.cflags/inputs.configure feed both the
     # Configure step and the cache checksum, so the two cannot drift apart.
@@ -656,17 +661,11 @@ jobs:
   #      whether our driver build is good; official wires its test job with
   #      continue: true for the same reason.
   #
-  # Neither layer loads winepipewire.drv against a live daemon, so the product
-  # audio path stays unverified here; presence is what we gate on.
-  #
-  # TODO (ideal future step, not implemented): mmdevapi render smoke against a
-  # private PipeWire daemon inside the runner, e.g.:
-  #   - apt install pipewire wireplumber pipewire-pulse / or build minimal pw
-  #   - XDG_RUNTIME_DIR=... pipewire & wireplumber &  (null sink / dummy driver)
-  #   - WINEDEBUG=+pipewire PROTON_LOG=1 run a tiny mmdevapi render EXE
-  #     (or wine's mmdevapi test) and grep the log for winepipewire init +
-  #     stream connect; fail if pulse/alsa backend was selected instead.
-  # Headless PW+session is flaky on GHA; keep this as a follow-up, not a gate.
+  # Neither layer loads winepipewire.drv against a live daemon: this job runs
+  # bare on the runner host, where libpipewire-0.3.so.0 is Ubuntu's 1.0.5 and
+  # not the 1.4.2 the driver was built against. Presence is what it gates on.
+  # Executing the driver is the separate "Smoke audio" job below, which enters
+  # the SDK image so the runtime library matches the deployed one.
   smoke:
     name: Smoke wine
     needs: [version, build]
@@ -801,9 +800,393 @@ jobs:
           export PROTONPATH="${PROTON_ROOT}"
           umu-run cmd.exe /c echo "pipewire-proton-ok"
 
+  # Audio gate (required). The build job checks winepipewire.so exists with the
+  # right ELF class and a fingerprint string. That cannot catch the failure
+  # this job exists for: newer PipeWire entry points are static inline
+  # functions dispatching through a SPA interface vtable, so building against
+  # 1.4.2 headers and running against an older libpipewire compiles, links,
+  # runs and silently returns -ENOTSUP. Only executing the driver against the
+  # deployed library sees it.
+  #
+  # Separate from "Smoke wine" because that job runs bare on the runner, where
+  # libpipewire-0.3.so.0 is Ubuntu 24.04's 1.0.5 and not the 1.4.2 the driver
+  # was built against, and because the ~9 GB image pull would otherwise sit on
+  # its critical path. It gates, unlike the umu step: a silent runtime no-op
+  # has to be able to fail the run. No secrets, no audio hardware, no network
+  # past the artifact download and the image pull.
+  audio:
+    name: Smoke audio
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    env:
+      BUILD_NAME: ${{ needs.version.outputs.build_name }}
+      WINE_SHA: ${{ needs.build.outputs.wine_sha }}
+      STEAMRT_IMAGE: ${{ needs.build.outputs.steamrt_image }}
+    steps:
+      - name: Download tarball
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.version.outputs.build_name }}.tar.xz
+
+      - name: Extract redist
+        id: extract
+        run: |
+          set -euo pipefail
+          tar -xJf "${BUILD_NAME}.tar.xz"
+          if [[ -d "$BUILD_NAME" ]]; then
+            root="$BUILD_NAME"
+          else
+            root=$(find . -mindepth 1 -maxdepth 1 -type d | head -1)
+          fi
+          test -n "$root"
+          test -f "${root}/build-info.txt"
+          grep -q "wine_sha=${WINE_SHA}" "${root}/build-info.txt"
+          echo "root=${PWD}/${root}" >> "$GITHUB_OUTPUT"
+
+      # The probe and the daemon drop-in are written on the host and mounted
+      # in, so the container command stays a single script invocation and the
+      # heredocs are not nested inside a docker run -c string.
+      - name: Write render probe + daemon config
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/audio-gate"
+          cat > "${RUNNER_TEMP}/audio-gate/wasapi_render_probe.c" <<'PROBE_C'
+          /* Minimal WASAPI shared-mode render probe.
+           *
+           * Drives mmdevapi far enough to force winepipewire.drv through
+           * pw_context_connect -> device enumeration -> pw_stream_new ->
+           * pw_stream_connect -> Start. Every failure prints the failing call
+           * and its HRESULT and exits non-zero, so the gate can assert on the
+           * exit status and on the driver's own log lines independently.
+           */
+          #define COBJMACROS
+          #include <initguid.h>
+          #include <windows.h>
+          #include <mmdeviceapi.h>
+          #include <audioclient.h>
+          #include <stdio.h>
+
+          #define CHECK(hr, what)                                                        \
+              do {                                                                       \
+                  if (FAILED(hr)) {                                                      \
+                      printf("PROBE-FAIL %s hr=0x%08lx\n", (what), (unsigned long)(hr)); \
+                      fflush(stdout);                                                    \
+                      return 2;                                                          \
+                  }                                                                      \
+              } while (0)
+
+          int main(void)
+          {
+              IMMDeviceEnumerator *devenum = NULL;
+              IMMDevice *dev = NULL;
+              IAudioClient *client = NULL;
+              IAudioRenderClient *render = NULL;
+              WAVEFORMATEX *fmt = NULL;
+              UINT32 frames = 0, padding = 0, avail, rendered = 0;
+              BYTE *buf = NULL;
+              HRESULT hr;
+              int i;
+
+              printf("PROBE-START %u-bit\n", (unsigned)(sizeof(void *) * 8));
+
+              hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+              CHECK(hr, "CoInitializeEx");
+
+              hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER,
+                                    &IID_IMMDeviceEnumerator, (void **)&devenum);
+              CHECK(hr, "CoCreateInstance(MMDeviceEnumerator)");
+
+              /* E_NOTFOUND here means the driver published no render endpoint,
+               * which is what a driver that never reached the daemon looks
+               * like from mmdevapi. */
+              hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(devenum, eRender, eConsole, &dev);
+              CHECK(hr, "GetDefaultAudioEndpoint(eRender)");
+
+              hr = IMMDevice_Activate(dev, &IID_IAudioClient, CLSCTX_INPROC_SERVER, NULL,
+                                      (void **)&client);
+              CHECK(hr, "IMMDevice::Activate(IAudioClient)");
+
+              hr = IAudioClient_GetMixFormat(client, &fmt);
+              CHECK(hr, "IAudioClient::GetMixFormat");
+              printf("PROBE-FORMAT %u ch %lu Hz %u bit\n", fmt->nChannels,
+                     (unsigned long)fmt->nSamplesPerSec, fmt->wBitsPerSample);
+
+              /* Shared mode, 200 ms, no event callback: a plain timer loop with
+               * no extra threads and nothing that needs a real clock to make
+               * progress. */
+              hr = IAudioClient_Initialize(client, AUDCLNT_SHAREMODE_SHARED, 0,
+                                           2000000, 0, fmt, NULL);
+              CHECK(hr, "IAudioClient::Initialize");
+
+              hr = IAudioClient_GetBufferSize(client, &frames);
+              CHECK(hr, "IAudioClient::GetBufferSize");
+              printf("PROBE-BUFFER %u frames\n", frames);
+
+              hr = IAudioClient_GetService(client, &IID_IAudioRenderClient, (void **)&render);
+              CHECK(hr, "IAudioClient::GetService(IAudioRenderClient)");
+
+              /* Prime with silence. AUDCLNT_BUFFERFLAGS_SILENT keeps the probe
+               * format agnostic: no need to synthesise samples for whatever the
+               * mix format turns out to be. */
+              hr = IAudioRenderClient_GetBuffer(render, frames, &buf);
+              CHECK(hr, "IAudioRenderClient::GetBuffer(prime)");
+              hr = IAudioRenderClient_ReleaseBuffer(render, frames, AUDCLNT_BUFFERFLAGS_SILENT);
+              CHECK(hr, "IAudioRenderClient::ReleaseBuffer(prime)");
+              rendered += frames;
+
+              hr = IAudioClient_Start(client);
+              CHECK(hr, "IAudioClient::Start");
+
+              /* Twenty 50 ms turns of a normal render loop. Whether the graph
+               * drains anything depends on a session manager linking the
+               * stream, and the image ships none, so the frame count is
+               * reported and not asserted. */
+              for (i = 0; i < 20; i++) {
+                  Sleep(50);
+                  hr = IAudioClient_GetCurrentPadding(client, &padding);
+                  CHECK(hr, "IAudioClient::GetCurrentPadding");
+                  avail = frames - padding;
+                  if (!avail)
+                      continue;
+                  hr = IAudioRenderClient_GetBuffer(render, avail, &buf);
+                  CHECK(hr, "IAudioRenderClient::GetBuffer");
+                  hr = IAudioRenderClient_ReleaseBuffer(render, avail, AUDCLNT_BUFFERFLAGS_SILENT);
+                  CHECK(hr, "IAudioRenderClient::ReleaseBuffer");
+                  rendered += avail;
+              }
+
+              hr = IAudioClient_Stop(client);
+              CHECK(hr, "IAudioClient::Stop");
+
+              printf("PROBE-OK rendered=%u padding=%u/%u\n", rendered, padding, frames);
+              fflush(stdout);
+
+              CoTaskMemFree(fmt);
+              IAudioRenderClient_Release(render);
+              IAudioClient_Release(client);
+              IMMDevice_Release(dev);
+              IMMDeviceEnumerator_Release(devenum);
+              CoUninitialize();
+              return 0;
+          }
+          PROBE_C
+          # Drop-in over the image's stock pipewire.conf rather than a
+          # hand-rolled minimal one: a from-scratch context.modules list that
+          # omits the access module leaves clients hanging forever on connect.
+          # The image ships no alsa or udev spa plugin and no session manager,
+          # so the stock daemon otherwise comes up with only its Dummy and
+          # Freewheel drivers and zero audio endpoints.
+          cat > "${RUNNER_TEMP}/audio-gate/10-ci-null-sink.conf" <<'PW_CONF'
+          context.objects = [
+              {   factory = adapter
+                  args = {
+                      factory.name     = support.null-audio-sink
+                      node.name        = "ci-null-sink"
+                      node.description = "CI Null Sink"
+                      media.class      = "Audio/Sink"
+                      object.linger    = true
+                      audio.position   = "FL,FR"
+                  }
+              }
+              {   factory = metadata
+                  args = { metadata.name = default }
+              }
+          ]
+          PW_CONF
+          cat > "${RUNNER_TEMP}/audio-gate/run-gate.sh" <<'GATE_SH'
+          # Runs inside the SDK container. /redist is the extracted tree,
+          # /gate is this scratch directory.
+          set -euo pipefail
+          PROTON_ROOT=/redist
+          OUT=/gate
+          fail() { echo "::error::$*"; exit 1; }
+
+          # A private runtime dir keeps the daemon off any socket the runner
+          # image or a sibling step might already own.
+          export XDG_RUNTIME_DIR=/tmp/pw-ci-run
+          export PIPEWIRE_RUNTIME_DIR="$XDG_RUNTIME_DIR"
+          export XDG_CONFIG_HOME=/tmp/pw-ci-cfg
+          rm -rf "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"
+          mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/pipewire/pipewire.conf.d"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cp "$OUT/10-ci-null-sink.conf" "$XDG_CONFIG_HOME/pipewire/pipewire.conf.d/"
+
+          echo "::group::PipeWire runtime the driver will bind to"
+          so64="${PROTON_ROOT}/files/lib/wine/x86_64-unix/winepipewire.so"
+          test -s "$so64" || fail "redist has no x86_64-unix/winepipewire.so"
+          # If the redist ever started bundling its own libpipewire, this gate
+          # would silently stop testing the platform library it exists to test.
+          readelf -d "$so64" | grep -q 'libpipewire-0.3.so.0' \
+            || fail "winepipewire.so does not link libpipewire-0.3.so.0"
+          readelf -d "$so64" | grep NEEDED
+          echo "runtime: $(readlink -f /usr/lib/x86_64-linux-gnu/libpipewire-0.3.so.0)"
+          echo "headers: $(pkg-config --modversion libpipewire-0.3 2>/dev/null || echo unknown)"
+          echo "::endgroup::"
+
+          echo "::group::Private PipeWire daemon"
+          pipewire > "$OUT/pipewire-daemon.log" 2>&1 &
+          pw_pid=$!
+          trap 'kill "$pw_pid" 2>/dev/null || true' EXIT
+          ready=
+          for _ in $(seq 1 60); do
+            if timeout 5 pw-dump >/dev/null 2>&1; then ready=1; break; fi
+            kill -0 "$pw_pid" 2>/dev/null \
+              || { cat "$OUT/pipewire-daemon.log"; fail "private pipewire daemon exited during startup"; }
+            sleep 0.25
+          done
+          [ -n "$ready" ] \
+            || { cat "$OUT/pipewire-daemon.log"; fail "private pipewire daemon never accepted a client within 15s"; }
+          timeout 10 pw-metadata -n default 0 default.audio.sink '{ "name": "ci-null-sink" }' >/dev/null \
+            || fail "could not publish default.audio.sink metadata"
+          timeout 10 pw-dump | python3 -c '
+          import json, sys
+          sinks = [o for o in json.load(sys.stdin)
+                   if ((o.get("info") or {}).get("props") or {}).get("media.class") == "Audio/Sink"]
+          for o in sinks:
+              print("sink:", o["id"], ((o.get("info") or {}).get("props") or {}).get("node.name"))
+          sys.exit(0 if sinks else 1)' || fail "private daemon published no Audio/Sink node"
+          echo "::endgroup::"
+
+          echo "::group::Scratch wine prefix"
+          export WINEPREFIX=/tmp/pw-ci-pfx
+          export WINEDLLOVERRIDES="mscoree,mshtml="
+          export WINEDEBUG=-all
+          rm -rf "$WINEPREFIX"
+          "${PROTON_ROOT}/files/bin/wine" --version
+          timeout 600 "${PROTON_ROOT}/files/bin/wine" wineboot -i
+          timeout 120 "${PROTON_ROOT}/files/bin/wineserver" -w || true
+          echo "::endgroup::"
+
+          # Both word sizes: 32-bit titles are the bulk of the audio bug
+          # reports, and the i386 driver takes its own spa plugin dir path.
+          status=0
+          for bits in 64 32; do
+            case "$bits" in
+              64) cc=x86_64-w64-mingw32-gcc ;;
+              32) cc=i686-w64-mingw32-gcc ;;
+            esac
+            exe="$OUT/wasapi_render_probe${bits}.exe"
+            log="$OUT/audio-probe${bits}.log"
+
+            echo "::group::${bits}-bit render probe"
+            "$cc" -O1 -o "$exe" "$OUT/wasapi_render_probe.c" -lole32 -luuid \
+              || fail "${bits}-bit probe failed to compile"
+
+            # WINE_AUDIO_DRIVER pins mmdevapi to exactly one driver, so there is
+            # no pulse/alsa fallback that could mask a winepipewire which failed
+            # to initialise. +pipewire turns on every class on the driver's
+            # channel: the version and enumeration lines are TRACE, the dispatch
+            # self-report is WARN.
+            rc=0
+            env WINE_AUDIO_DRIVER=pipewire WINEDEBUG=+pipewire \
+              timeout 180 "${PROTON_ROOT}/files/bin/wine" "$exe" > "$log" 2>&1 || rc=$?
+            echo "probe exit: ${rc}"
+            grep -E '^PROBE-|:pipewire:' "$log" || true
+            echo "::endgroup::"
+
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::${bits}-bit WASAPI render probe exited ${rc}"
+              status=1
+              continue
+            fi
+            grep -q '^PROBE-OK ' "$log" \
+              || { echo "::error::${bits}-bit probe never reported PROBE-OK"; status=1; continue; }
+
+            # 1. The driver's own runtime-vs-headers report, logged from
+            #    pipewire_process_attach. This is the direct tripwire for the
+            #    silent no-op class described above.
+            vline=$(grep -oE 'PipeWire [0-9][0-9.]*, header [0-9][0-9.]*' "$log" | head -1 || true)
+            if [ -z "$vline" ]; then
+              echo "::error::${bits}-bit: driver never logged its PipeWire runtime/header versions, so it did not reach pipewire_process_attach"
+              status=1
+              continue
+            fi
+            rt_ver=${vline#PipeWire }; rt_ver=${rt_ver%%,*}
+            hdr_ver=${vline##*header }
+            echo "${bits}-bit: runtime libpipewire ${rt_ver}, built against headers ${hdr_ver}"
+            if [ "$(printf '%s\n%s\n' "$hdr_ver" "$rt_ver" | sort -V | head -1)" != "$hdr_ver" ]; then
+              echo "::error::${bits}-bit: runtime libpipewire ${rt_ver} is older than the ${hdr_ver} headers the driver was built against; newer inline entry points will silently return -ENOTSUP"
+              status=1
+              continue
+            fi
+
+            # 2. The driver walked the real graph and found the published sink.
+            grep -q 'add_device .*(ci-null-sink)' "$log" \
+              || { echo "::error::${bits}-bit: driver never enumerated the ci-null-sink node"; status=1; continue; }
+
+            # 3. Default endpoint resolved through the "default" metadata object,
+            #    not the index-0 fallback.
+            grep -qE 'probe for .*: [1-9][0-9]* sinks default="ci-null-sink"' "$log" \
+              || { echo "::error::${bits}-bit: driver did not resolve ci-null-sink as the default render endpoint"; status=1; continue; }
+
+            # 4. Dispatch self-report, logged immediately after pw_stream_connect
+            #    returns success. Only builds carrying wine-cachyos 32257b88b
+            #    emit it, so require it exactly when the shipped .so contains the
+            #    format string. Older pins still gate on 1 to 3 plus the probe,
+            #    where IAudioClient::Initialize succeeding already implies
+            #    pw_stream_connect returned and the stream reached PAUSED.
+            if strings "$so64" | grep -q 'audio dispatch: '; then
+              if grep -qE 'audio dispatch: render requested .*, effective .*, loop ' "$log"; then
+                echo "${bits}-bit: $(grep -oE 'audio dispatch: render requested .*' "$log" | head -1)"
+              else
+                echo "::error::${bits}-bit: driver ships the dispatch self-report but never logged it, so pw_stream_connect was not reached"
+                status=1
+                continue
+              fi
+            else
+              echo "::warning::${bits}-bit: this wine build predates the audio dispatch self-report (wine-cachyos 32257b88b)"
+            fi
+
+            # 5. Nothing on the driver's channel may be an error, and a dispatch
+            #    MISMATCH means the requested mode was not the one in force.
+            if grep -qE ':err:pipewire:|MISMATCH' "$log"; then
+              echo "::error::${bits}-bit: driver logged an error or a dispatch mismatch"
+              grep -E ':err:pipewire:|MISMATCH' "$log"
+              status=1
+              continue
+            fi
+
+            # rendered/padding is reported, not asserted: draining needs a
+            # session manager to link the stream to the sink, and the image
+            # ships no wireplumber. Reaching connect is what this gate proves.
+            echo "${bits}-bit: $(grep '^PROBE-OK ' "$log")"
+          done
+          exit "$status"
+          GATE_SH
+          chmod +x "${RUNNER_TEMP}/audio-gate/run-gate.sh"
+          # No de-indent pass here: the YAML block scalar already strips this
+          # step's common indent, so each heredoc body lands with exactly the
+          # relative indentation it is written with above.
+          head -3 "${RUNNER_TEMP}/audio-gate/run-gate.sh"
+
+      - name: Render probe against a private PipeWire daemon
+        env:
+          PROTON_ROOT: ${{ steps.extract.outputs.root }}
+        run: |
+          set -euo pipefail
+          test -n "$STEAMRT_IMAGE"
+          echo "SDK image: ${STEAMRT_IMAGE}"
+          # --privileged is deliberately not used. The daemon runs unprivileged
+          # with no rtkit and no dbus; module-rt logs that it cannot raise
+          # priority and the graph still comes up, which is all this asserts.
+          docker run --rm \
+            -v "${PROTON_ROOT}:/redist:ro" \
+            -v "${RUNNER_TEMP}/audio-gate:/gate" \
+            -w /gate \
+            "$STEAMRT_IMAGE" \
+            bash /gate/run-gate.sh
+
+      - name: Upload audio gate logs
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ needs.version.outputs.build_name }}.audio-gate-logs
+          path: ${{ runner.temp }}/audio-gate/*.log
+          if-no-files-found: warn
+
   release:
     name: GitHub Release
-    needs: [version, build, smoke]
+    needs: [version, build, smoke, audio]
     if: needs.version.outputs.do_release == 'true'
     runs-on: ubuntu-latest
     # Only job that creates tags / uploads release assets.
