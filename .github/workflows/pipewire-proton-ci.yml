@@ -808,6 +808,15 @@ jobs:
   # runs and silently returns -ENOTSUP. Only executing the driver against the
   # deployed library sees it.
   #
+  # It also A/Bs the RT dispatch flag, on PROPERTIES and not on latency.
+  # PipeWire derives effective link async from (out_node.async ||
+  # in_node.async) AND both ports carrying PW_IMPL_PORT_FLAG_ASYNC
+  # (impl-link.c:1554-1556), and reliable_driver can force synchronous IO at
+  # activation (impl-link.c:807-814). node.async and link.async are therefore
+  # inputs to the scheduling decision, not the decision. Propagated port
+  # latency reads 0.0 in both arms on this null sink, so the job reports what
+  # it observed and what it did not.
+  #
   # Separate from "Smoke wine" because that job runs bare on the runner, where
   # libpipewire-0.3.so.0 is Ubuntu 24.04's 1.0.5 and not the 1.4.2 the driver
   # was built against, and because the ~9 GB image pull would otherwise sit on
@@ -843,28 +852,24 @@ jobs:
           grep -q "wine_sha=${WINE_SHA}" "${root}/build-info.txt"
           echo "root=${PWD}/${root}" >> "$GITHUB_OUTPUT"
 
-      # The probe and the daemon drop-in are written on the host and mounted
-      # in, so the container command stays a single script invocation and the
-      # heredocs are not nested inside a docker run -c string.
-      - name: Write render probe + daemon config
+      # Written on the host and mounted in, so the container command stays a
+      # single script invocation instead of nesting heredocs inside docker run.
+      # No de-indent pass: the YAML block scalar already strips this step's
+      # common indent, so each body lands with the indentation written here.
+      - name: Write gate inputs
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/audio-gate"
           cat > "${RUNNER_TEMP}/audio-gate/wasapi_render_probe.c" <<'PROBE_C'
-          /* Minimal WASAPI shared-mode render probe.
-           *
-           * Drives mmdevapi far enough to force winepipewire.drv through
-           * pw_context_connect -> device enumeration -> pw_stream_new ->
-           * pw_stream_connect -> Start. Every failure prints the failing call
-           * and its HRESULT and exits non-zero, so the gate can assert on the
-           * exit status and on the driver's own log lines independently.
-           */
+          /* WASAPI render probe with a hold window so the server graph can be sampled
+           * while the stream is live.  argv[1] = milliseconds to hold after Start. */
           #define COBJMACROS
           #include <initguid.h>
           #include <windows.h>
           #include <mmdeviceapi.h>
           #include <audioclient.h>
           #include <stdio.h>
+          #include <stdlib.h>
 
           #define CHECK(hr, what)                                                        \
               do {                                                                       \
@@ -875,7 +880,7 @@ jobs:
                   }                                                                      \
               } while (0)
 
-          int main(void)
+          int main(int argc, char **argv)
           {
               IMMDeviceEnumerator *devenum = NULL;
               IMMDevice *dev = NULL;
@@ -885,63 +890,43 @@ jobs:
               UINT32 frames = 0, padding = 0, avail, rendered = 0;
               BYTE *buf = NULL;
               HRESULT hr;
-              int i;
+              int hold_ms = (argc > 1) ? atoi(argv[1]) : 1000;
+              int i, turns = hold_ms / 50;
 
-              printf("PROBE-START %u-bit\n", (unsigned)(sizeof(void *) * 8));
+              printf("PROBE-START %u-bit hold=%dms\n", (unsigned)(sizeof(void *) * 8), hold_ms);
+              fflush(stdout);
 
               hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
               CHECK(hr, "CoInitializeEx");
-
               hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER,
                                     &IID_IMMDeviceEnumerator, (void **)&devenum);
               CHECK(hr, "CoCreateInstance(MMDeviceEnumerator)");
-
-              /* E_NOTFOUND here means the driver published no render endpoint,
-               * which is what a driver that never reached the daemon looks
-               * like from mmdevapi. */
               hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(devenum, eRender, eConsole, &dev);
               CHECK(hr, "GetDefaultAudioEndpoint(eRender)");
-
-              hr = IMMDevice_Activate(dev, &IID_IAudioClient, CLSCTX_INPROC_SERVER, NULL,
-                                      (void **)&client);
+              hr = IMMDevice_Activate(dev, &IID_IAudioClient, CLSCTX_INPROC_SERVER, NULL, (void **)&client);
               CHECK(hr, "IMMDevice::Activate(IAudioClient)");
-
               hr = IAudioClient_GetMixFormat(client, &fmt);
               CHECK(hr, "IAudioClient::GetMixFormat");
               printf("PROBE-FORMAT %u ch %lu Hz %u bit\n", fmt->nChannels,
                      (unsigned long)fmt->nSamplesPerSec, fmt->wBitsPerSample);
-
-              /* Shared mode, 200 ms, no event callback: a plain timer loop with
-               * no extra threads and nothing that needs a real clock to make
-               * progress. */
-              hr = IAudioClient_Initialize(client, AUDCLNT_SHAREMODE_SHARED, 0,
-                                           2000000, 0, fmt, NULL);
+              hr = IAudioClient_Initialize(client, AUDCLNT_SHAREMODE_SHARED, 0, 2000000, 0, fmt, NULL);
               CHECK(hr, "IAudioClient::Initialize");
-
               hr = IAudioClient_GetBufferSize(client, &frames);
               CHECK(hr, "IAudioClient::GetBufferSize");
               printf("PROBE-BUFFER %u frames\n", frames);
-
               hr = IAudioClient_GetService(client, &IID_IAudioRenderClient, (void **)&render);
               CHECK(hr, "IAudioClient::GetService(IAudioRenderClient)");
-
-              /* Prime with silence. AUDCLNT_BUFFERFLAGS_SILENT keeps the probe
-               * format agnostic: no need to synthesise samples for whatever the
-               * mix format turns out to be. */
               hr = IAudioRenderClient_GetBuffer(render, frames, &buf);
               CHECK(hr, "IAudioRenderClient::GetBuffer(prime)");
               hr = IAudioRenderClient_ReleaseBuffer(render, frames, AUDCLNT_BUFFERFLAGS_SILENT);
               CHECK(hr, "IAudioRenderClient::ReleaseBuffer(prime)");
               rendered += frames;
-
               hr = IAudioClient_Start(client);
               CHECK(hr, "IAudioClient::Start");
+              printf("PROBE-RUNNING\n");
+              fflush(stdout);
 
-              /* Twenty 50 ms turns of a normal render loop. Whether the graph
-               * drains anything depends on a session manager linking the
-               * stream, and the image ships none, so the frame count is
-               * reported and not asserted. */
-              for (i = 0; i < 20; i++) {
+              for (i = 0; i < turns; i++) {
                   Sleep(50);
                   hr = IAudioClient_GetCurrentPadding(client, &padding);
                   CHECK(hr, "IAudioClient::GetCurrentPadding");
@@ -954,13 +939,10 @@ jobs:
                   CHECK(hr, "IAudioRenderClient::ReleaseBuffer");
                   rendered += avail;
               }
-
               hr = IAudioClient_Stop(client);
               CHECK(hr, "IAudioClient::Stop");
-
               printf("PROBE-OK rendered=%u padding=%u/%u\n", rendered, padding, frames);
               fflush(stdout);
-
               CoTaskMemFree(fmt);
               IAudioRenderClient_Release(render);
               IAudioClient_Release(client);
@@ -970,13 +952,14 @@ jobs:
               return 0;
           }
           PROBE_C
-          # Drop-in over the image's stock pipewire.conf rather than a
-          # hand-rolled minimal one: a from-scratch context.modules list that
-          # omits the access module leaves clients hanging forever on connect.
-          # The image ships no alsa or udev spa plugin and no session manager,
-          # so the stock daemon otherwise comes up with only its Dummy and
-          # Freewheel drivers and zero audio endpoints.
           cat > "${RUNNER_TEMP}/audio-gate/10-ci-null-sink.conf" <<'PW_CONF'
+          # Drop-in over the stock steamrt pipewire.conf.
+          #
+          # The image ships no alsa/udev spa plugin and no session manager, so the
+          # stock daemon comes up with only its Dummy/Freewheel drivers and zero audio
+          # endpoints. This adds the single software sink the driver renders into, and
+          # the "default" metadata object wireplumber would normally publish so
+          # winepipewire resolves a default endpoint the same way it does on a desktop.
           context.objects = [
               {   factory = adapter
                   args = {
@@ -993,58 +976,583 @@ jobs:
               }
           ]
           PW_CONF
+          cat > "${RUNNER_TEMP}/audio-gate/ci_linker.c" <<'LINKER_C'
+          /* ci-linker: the smallest session manager that makes this graph testable.
+           *
+           * The SDK image ships no wireplumber, and PipeWire's core links nothing by
+           * itself: node.autoconnect is a request a session manager has to honour.
+           * With nobody honouring it, both the sink and the client stream sit in
+           * "suspended" with no ports at all, so there is no link, no propagated
+           * latency, and nothing to measure.
+           *
+           * Two steps, in the order wireplumber does them:
+           *   1. push a PortConfig(mode=dsp) param onto each adapter node, which is
+           *      what actually creates the ports,
+           *   2. link the stream's output ports to the sink's input ports, matching on
+           *      audio.channel so FL meets FL.
+           *
+           * argv[1] = sink node.name to link into.
+           */
+          #include <pipewire/pipewire.h>
+          #include <spa/param/audio/format-utils.h>
+          #include <spa/param/param.h>
+          #include <spa/pod/builder.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <stdlib.h>
+
+          #define MAX_NODES 8
+          #define MAX_PORTS 64
+
+          struct port {
+              uint32_t id;
+              uint32_t node_id;
+              enum spa_direction direction;
+              char channel[16];
+              int linked;
+          };
+
+          struct node {
+              uint32_t id;
+              int is_sink;
+              int configured;
+              struct pw_proxy *proxy;
+          };
+
+          struct data {
+              struct pw_main_loop *loop;
+              struct pw_core *core;
+              struct pw_registry *registry;
+              struct spa_hook registry_listener;
+              struct spa_hook core_listener;
+              const char *sink_name;
+              uint32_t sink_id;
+              struct node nodes[MAX_NODES];
+              unsigned n_nodes;
+              struct port ports[MAX_PORTS];
+              unsigned n_ports;
+              unsigned n_links;
+          };
+          /* PortConfig(mode=dsp) is the param that makes an adapter materialise ports.
+           * The format is not optional here: in dsp mode the adapter derives one port
+           * per channel from it, so a PortConfig without a format is accepted and then
+           * creates nothing, which is exactly what a missing session manager looks
+           * like from the outside. */
+          static void configure_node(struct data *d, uint32_t id, enum spa_direction dir)
+          {
+              uint8_t fbuf[1024], pbuf[1024];
+              struct spa_pod_builder fb = SPA_POD_BUILDER_INIT(fbuf, sizeof(fbuf));
+              struct spa_pod_builder pb = SPA_POD_BUILDER_INIT(pbuf, sizeof(pbuf));
+              struct spa_audio_info_raw info;
+              struct spa_pod *format, *param;
+              struct pw_proxy *proxy;
+              struct node *n;
+
+              if (d->n_nodes >= MAX_NODES)
+                  return;
+
+              proxy = pw_registry_bind(d->registry, id, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0);
+              if (proxy == NULL) {
+                  fprintf(stderr, "ci-linker: cannot bind node %u\n", id);
+                  return;
+              }
+
+              spa_zero(info);
+              info.format = SPA_AUDIO_FORMAT_F32P;
+              info.rate = 48000;
+              info.channels = 2;
+              info.position[0] = SPA_AUDIO_CHANNEL_FL;
+              info.position[1] = SPA_AUDIO_CHANNEL_FR;
+              format = spa_format_audio_raw_build(&fb, SPA_PARAM_Format, &info);
+
+              param = spa_pod_builder_add_object(&pb,
+                      SPA_TYPE_OBJECT_ParamPortConfig, SPA_PARAM_PortConfig,
+                      SPA_PARAM_PORT_CONFIG_direction, SPA_POD_Id(dir),
+                      SPA_PARAM_PORT_CONFIG_mode,      SPA_POD_Id(SPA_PARAM_PORT_CONFIG_MODE_dsp),
+                      SPA_PARAM_PORT_CONFIG_monitor,   SPA_POD_Bool(false),
+                      SPA_PARAM_PORT_CONFIG_control,   SPA_POD_Bool(false),
+                      SPA_PARAM_PORT_CONFIG_format,    SPA_POD_Pod(format));
+
+              pw_node_set_param((struct pw_node *)proxy, SPA_PARAM_PortConfig, 0, param);
+
+              n = &d->nodes[d->n_nodes++];
+              n->id = id;
+              n->is_sink = (dir == SPA_DIRECTION_INPUT);
+              n->configured = 1;
+              n->proxy = proxy;
+
+              printf("ci-linker: PortConfig(dsp,%s,2ch F32P 48k) -> node %u\n",
+                     dir == SPA_DIRECTION_INPUT ? "in" : "out", id);
+              fflush(stdout);
+          }
+
+          static void try_links(struct data *d)
+          {
+              if (d->sink_id == SPA_ID_INVALID)
+                  return;
+
+              for (unsigned i = 0; i < d->n_ports; i++) {
+                  struct port *op = &d->ports[i];
+                  if (op->linked || op->direction != SPA_DIRECTION_OUTPUT || op->node_id == d->sink_id)
+                      continue;
+
+                  for (unsigned j = 0; j < d->n_ports; j++) {
+                      struct port *ip = &d->ports[j];
+                      char out[16], in[16], op_s[16], ip_s[16];
+                      struct pw_properties *props;
+
+                      if (ip->direction != SPA_DIRECTION_INPUT || ip->node_id != d->sink_id)
+                          continue;
+                      /* Match channels so FL meets FL. Ports with no audio.channel
+                       * (mono, or a driver that did not label them) pair positionally. */
+                      if (op->channel[0] && ip->channel[0] && strcmp(op->channel, ip->channel))
+                          continue;
+
+                      snprintf(out, sizeof(out), "%u", op->node_id);
+                      snprintf(in, sizeof(in), "%u", ip->node_id);
+                      snprintf(op_s, sizeof(op_s), "%u", op->id);
+                      snprintf(ip_s, sizeof(ip_s), "%u", ip->id);
+
+                      props = pw_properties_new(PW_KEY_LINK_OUTPUT_NODE, out,
+                                                PW_KEY_LINK_OUTPUT_PORT, op_s,
+                                                PW_KEY_LINK_INPUT_NODE, in,
+                                                PW_KEY_LINK_INPUT_PORT, ip_s,
+                                                PW_KEY_OBJECT_LINGER, "true",
+                                                NULL);
+                      if (!props)
+                          return;
+                      pw_core_create_object(d->core, "link-factory",
+                                            PW_TYPE_INTERFACE_Link, PW_VERSION_LINK,
+                                            &props->dict, 0);
+                      pw_properties_free(props);
+                      op->linked = 1;
+                      d->n_links++;
+                      printf("ci-linker: link %u:%u (%s) -> %u:%u (%s)\n",
+                             op->node_id, op->id, op->channel[0] ? op->channel : "-",
+                             ip->node_id, ip->id, ip->channel[0] ? ip->channel : "-");
+                      fflush(stdout);
+                      break;
+                  }
+              }
+          }
+
+          static void on_global(void *data, uint32_t id, uint32_t permissions,
+                                const char *type, uint32_t version, const struct spa_dict *props)
+          {
+              struct data *d = data;
+
+              if (props == NULL)
+                  return;
+
+              if (!strcmp(type, PW_TYPE_INTERFACE_Node)) {
+                  const char *cls = spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
+                  const char *name = spa_dict_lookup(props, PW_KEY_NODE_NAME);
+                  if (cls == NULL)
+                      return;
+                  if (!strcmp(cls, "Audio/Sink") && name && !strcmp(name, d->sink_name)) {
+                      d->sink_id = id;
+                      printf("ci-linker: sink \"%s\" is node %u\n", d->sink_name, id);
+                      fflush(stdout);
+                      configure_node(d, id, SPA_DIRECTION_INPUT);
+                  } else if (!strcmp(cls, "Stream/Output/Audio")) {
+                      printf("ci-linker: playback stream node %u (%s)\n", id, name ? name : "?");
+                      fflush(stdout);
+                      configure_node(d, id, SPA_DIRECTION_OUTPUT);
+                  }
+                  return;
+              }
+
+              if (!strcmp(type, PW_TYPE_INTERFACE_Port)) {
+                  const char *dir = spa_dict_lookup(props, PW_KEY_PORT_DIRECTION);
+                  const char *nid = spa_dict_lookup(props, PW_KEY_NODE_ID);
+                  const char *ch = spa_dict_lookup(props, PW_KEY_AUDIO_CHANNEL);
+                  struct port *p;
+
+                  if (dir == NULL || nid == NULL || d->n_ports >= MAX_PORTS)
+                      return;
+                  p = &d->ports[d->n_ports++];
+                  p->id = id;
+                  p->node_id = (uint32_t)atoi(nid);
+                  p->direction = !strcmp(dir, "in") ? SPA_DIRECTION_INPUT : SPA_DIRECTION_OUTPUT;
+                  p->linked = 0;
+                  snprintf(p->channel, sizeof(p->channel), "%s", ch ? ch : "");
+                  printf("ci-linker: port %u node=%u dir=%s ch=%s\n",
+                         id, p->node_id, dir, p->channel[0] ? p->channel : "-");
+                  fflush(stdout);
+                  try_links(d);
+              }
+          }
+
+          static const struct pw_registry_events registry_events = {
+              PW_VERSION_REGISTRY_EVENTS,
+              .global = on_global,
+          };
+
+          static void on_core_error(void *data, uint32_t id, int seq, int res, const char *message)
+          {
+              fprintf(stderr, "ci-linker: core error id=%u seq=%d res=%d: %s\n", id, seq, res, message);
+              fflush(stderr);
+          }
+
+          static const struct pw_core_events core_events = {
+              PW_VERSION_CORE_EVENTS,
+              .error = on_core_error,
+          };
+
+          int main(int argc, char *argv[])
+          {
+              struct data d = { 0 };
+              struct pw_context *context;
+
+              d.sink_name = (argc > 1) ? argv[1] : "ci-null-sink";
+              d.sink_id = SPA_ID_INVALID;
+
+              pw_init(&argc, &argv);
+
+              d.loop = pw_main_loop_new(NULL);
+              if (!d.loop)
+                  return 1;
+              context = pw_context_new(pw_main_loop_get_loop(d.loop), NULL, 0);
+              if (!context)
+                  return 1;
+              d.core = pw_context_connect(context, NULL, 0);
+              if (!d.core) {
+                  fprintf(stderr, "ci-linker: cannot connect to daemon\n");
+                  return 1;
+              }
+              pw_core_add_listener(d.core, &d.core_listener, &core_events, &d);
+              d.registry = pw_core_get_registry(d.core, PW_VERSION_REGISTRY, 0);
+              pw_registry_add_listener(d.registry, &d.registry_listener, &registry_events, &d);
+
+              printf("ci-linker: watching for playback streams to link into \"%s\"\n", d.sink_name);
+              fflush(stdout);
+
+              pw_main_loop_run(d.loop);
+
+              pw_proxy_destroy((struct pw_proxy *)d.registry);
+              pw_core_disconnect(d.core);
+              pw_context_destroy(context);
+              pw_main_loop_destroy(d.loop);
+              pw_deinit();
+              return 0;
+          }
+          LINKER_C
+          cat > "${RUNNER_TEMP}/audio-gate/extract.py" <<'EXTRACT_PY'
+          #!/usr/bin/env python3
+          """Pull server-side scheduling PROPERTIES out of a pw-dump snapshot.
+
+          Everything here is what the SERVER reports, never what the driver claims.
+          It is still only properties, not effective scheduling. PipeWire computes
+          effective link async as (out_node.async || in_node.async) AND both ports
+          carrying PW_IMPL_PORT_FLAG_ASYNC, and reliable_driver can force synchronous
+          IO at activation regardless, so node.async and link.async are inputs to that
+          decision rather than the decision itself. The propagated Latency param is
+          recorded next to them because that is where a real scheduling cost would
+          surface, but on the CI null-sink topology it reads 0.0 in every arm, so no
+          conclusion about graph cycles can be drawn from these numbers.
+          """
+          import json
+          import sys
+
+
+          def load(path):
+              with open(path) as f:
+                  return json.load(f)
+
+
+          def _t(o):
+              return str(o.get("type", ""))
+
+
+          def evidence(path, driver_row=None):
+              objs = load(path)
+              stream = None
+              for o in objs:
+                  # Must be a Node: the app's Client object carries the same
+                  # media.class, and picking it up loses every port and link.
+                  if not _t(o).endswith("Node"):
+                      continue
+                  p = ((o.get("info") or {}).get("props") or {})
+                  if p.get("media.class") == "Stream/Output/Audio":
+                      stream = o
+                      break
+              if stream is None:
+                  return None
+
+              sid = stream["id"]
+              sinfo = stream.get("info") or {}
+              sprops = sinfo.get("props") or {}
+              driver_id = sprops.get("node.driver-id")
+
+              sink_name = None
+              for o in objs:
+                  p = ((o.get("info") or {}).get("props") or {})
+                  if o["id"] == driver_id:
+                      sink_name = p.get("node.name")
+
+              links = []
+              for o in objs:
+                  if not _t(o).endswith("Link"):
+                      continue
+                  i = o.get("info") or {}
+                  p = i.get("props") or {}
+                  if i.get("output-node-id") == sid:
+                      links.append({
+                          "id": o["id"],
+                          "to_node": i.get("input-node-id"),
+                          "state": i.get("state"),
+                          # Creation intent only. Not proof on its own, which is why the
+                          # propagated Latency below is what we actually compare.
+                          "link.async": p.get("link.async"),
+                      })
+
+              lat = []
+              for o in objs:
+                  if not _t(o).endswith("Port"):
+                      continue
+                  i = o.get("info") or {}
+                  p = i.get("props") or {}
+                  if str(p.get("node.id")) != str(sid) or p.get("port.direction") != "out":
+                      continue
+                  for e in ((i.get("params") or {}).get("Latency") or []):
+                      if e.get("direction") != "Input":
+                          continue
+                      lat.append({
+                          "port": o["id"],
+                          "channel": p.get("audio.channel"),
+                          "minQuantum": e.get("minQuantum"),
+                          "maxQuantum": e.get("maxQuantum"),
+                          "minRate": e.get("minRate"),
+                          "maxRate": e.get("maxRate"),
+                          "minNs": e.get("minNs"),
+                          "maxNs": e.get("maxNs"),
+                      })
+              lat.sort(key=lambda x: (x["channel"] or "", x["port"]))
+
+              # Client set: every audio node in the graph. If this moves between arms
+              # the two samples are not comparable.
+              clients = sorted(
+                  (((o.get("info") or {}).get("props") or {}).get("node.name") or "?")
+                  for o in objs
+                  if _t(o).endswith("Node")
+              )
+
+              return {
+                  "stream_node": sid,
+                  "stream_name": sprops.get("node.name"),
+                  "server_node_async": sprops.get("node.async"),
+                  "node_loop_class": sprops.get("node.loop.class"),
+                  "node_loop_name": sprops.get("node.loop.name"),
+                  "node_latency_request": sprops.get("node.latency"),
+                  "driver_id": driver_id,
+                  "driver_name": sink_name,
+                  "stream_is_driver": driver_id == sid,
+                  "links": links,
+                  "propagated_input_latency": lat,
+                  "clients": clients,
+                  "driver_row": driver_row,
+              }
+
+
+          def ready(path):
+              ev = evidence(path)
+              if ev is None:
+                  return False
+              if not ev["links"]:
+                  return False
+              if not any(l["state"] == "active" for l in ev["links"]):
+                  return False
+              return bool(ev["propagated_input_latency"])
+
+
+          def fmt(ev, label):
+              print(f"  [{label}] stream node {ev['stream_node']} ({ev['stream_name']})")
+              print(f"  [{label}] server node.async = {ev['server_node_async']!r}   "
+                    f"loop.class = {ev['node_loop_class']!r}  loop.name = {ev['node_loop_name']!r}")
+              print(f"  [{label}] driver = {ev['driver_name']!r} (id {ev['driver_id']}), "
+                    f"our node is the driver: {ev['stream_is_driver']}")
+              if ev.get("driver_row"):
+                  print(f"  [{label}] driver row: {ev['driver_row']}")
+              for l in ev["links"]:
+                  print(f"  [{label}] link {l['id']} -> node {l['to_node']} state={l['state']} "
+                        f"link.async={l['link.async']!r}")
+              for e in ev["propagated_input_latency"]:
+                  print(f"  [{label}] port {e['port']} ch={e['channel']} propagated Latency[Input]: "
+                        f"minQuantum={e['minQuantum']} maxQuantum={e['maxQuantum']} "
+                        f"minRate={e['minRate']} maxRate={e['maxRate']} "
+                        f"minNs={e['minNs']} maxNs={e['maxNs']}")
+
+
+          def _truthy(v):
+              return v in (True, "true", "1", 1)
+
+
+          def compare(a_path, b_path, a_row=None, b_row=None, rt_capable=True):
+              a = evidence(a_path, a_row)
+              b = evidence(b_path, b_row)
+              if a is None or b is None:
+                  print("::error::one of the arms produced no render stream")
+                  return 1
+              fmt(a, "no-RT")
+              fmt(b, "RT")
+
+              rc = 0
+              # Controls. If the topology moved between arms the comparison is void,
+              # so these gate regardless of what the driver supports.
+              if a["driver_name"] != b["driver_name"]:
+                  print(f"::error::sink moved between arms: {a['driver_name']} vs {b['driver_name']}")
+                  rc = 1
+              if a["clients"] != b["clients"]:
+                  print(f"::error::client set moved between arms: {a['clients']} vs {b['clients']}")
+                  rc = 1
+              if a["driver_row"] and b["driver_row"] and a["driver_row"] != b["driver_row"]:
+                  print(f"::error::negotiated quantum/rate moved between arms: "
+                        f"{a['driver_row']} vs {b['driver_row']}")
+                  rc = 1
+              if a["stream_is_driver"] or b["stream_is_driver"]:
+                  print("::error::our stream node became the graph driver, so no extra cycle is "
+                        "charged either way and this A/B measures nothing")
+                  rc = 1
+
+              a_async = _truthy(a["server_node_async"])
+              b_async = _truthy(b["server_node_async"])
+              a_links = [_truthy(l["link.async"]) for l in a["links"]]
+              b_links = [_truthy(l["link.async"]) for l in b["links"]]
+
+              amin = [e["minQuantum"] for e in a["propagated_input_latency"]]
+              bmin = [e["minQuantum"] for e in b["propagated_input_latency"]]
+
+              print()
+              print(f"RESULT server node.async     no-RT={a['server_node_async']!r} RT={b['server_node_async']!r}")
+              print(f"RESULT link.async            no-RT={[l['link.async'] for l in a['links']]} "
+                    f"RT={[l['link.async'] for l in b['links']]}")
+              print(f"RESULT driver row (quantum/rate) {a['driver_row']}")
+              print(f"RESULT propagated Latency[Input] minQuantum (recorded, not gated)  no-RT={amin} RT={bmin}")
+              if amin and bmin and len(set(amin)) == 1 and len(set(bmin)) == 1:
+                  print(f"RESULT minQuantum delta (no-RT minus RT) = {amin[0] - bmin[0]}")
+
+              # The latency readout is recorded, never gated. On this topology every
+              # Latency entry is identically 0.0 in both arms, so a delta assertion
+              # could only ever assert 0.0, which certifies nothing. If the base ever
+              # goes non-zero the metric has come alive and this decision is worth
+              # revisiting, so say so loudly rather than silently keeping the numbers.
+              if any(v not in (0, 0.0, None) for v in amin + bmin):
+                  print("::notice::propagated Latency is no longer identically zero on this "
+                        "topology; the minQuantum delta has become meaningful and should be "
+                        "reconsidered as a gate")
+
+              if not rt_capable:
+                  print("::warning::this wine build does not read WINEPIPEWIRE_RT, so both arms "
+                        "ran the same code path; the async-mode flip is recorded, not asserted")
+                  return rc
+
+              # Gated: the server's own view of the two properties the RT flag drives.
+              # This catches a flag that silently fails to take effect. It is not a
+              # statement about effective scheduling, which nothing here observes.
+              if not a_async:
+                  print("::error::no-RT arm: server reports node.async "
+                        f"{a['server_node_async']!r}, expected the async main-loop mode")
+                  rc = 1
+              if b_async:
+                  print("::error::RT arm: server still reports node.async "
+                        f"{b['server_node_async']!r}, so PW_STREAM_FLAG_RT_PROCESS did not take effect")
+                  rc = 1
+              if not a_links or not all(a_links):
+                  print(f"::error::no-RT arm: expected every link async, got {a_links}")
+                  rc = 1
+              if not b_links or any(b_links):
+                  print(f"::error::RT arm: expected no async link, got {b_links}")
+                  rc = 1
+              if rc == 0:
+                  print("OBSERVED: WINEPIPEWIRE_RT cleared node.async and link.async on this "
+                        "topology, so the flag changed the properties it is meant to change.")
+                  print("NOT SHOWN: whether a graph cycle was actually removed. link.async "
+                        "reflects link creation intent, reliable_driver can force synchronous "
+                        "IO at activation regardless, and propagated port latency read 0.0 in "
+                        "both arms, so effective scheduling was never observed here.")
+                  print("TO CERTIFY A LATENCY CLAIM you would need, on a topology that reports "
+                        "it: non-zero propagated port Latency that moves between the arms, plus "
+                        "evidence of the driver relationship that makes the extra cycle apply, "
+                        "our node a follower of the node driving the graph. A null sink "
+                        "provides neither.")
+              return rc
+
+
+          if __name__ == "__main__":
+              args = sys.argv[1:]
+              if args and args[0] == "--compare":
+                  rest = args[1:]
+                  cap = True
+                  if "--rt-capable" in rest:
+                      i = rest.index("--rt-capable")
+                      cap = rest[i + 1] == "1"
+                      rest = rest[:i] + rest[i + 2:]
+                  sys.exit(compare(rest[0], rest[1],
+                                   rest[2] if len(rest) > 2 else None,
+                                   rest[3] if len(rest) > 3 else None,
+                                   cap))
+              if len(args) >= 2 and args[1] == "--ready":
+                  sys.exit(0 if ready(args[0]) else 1)
+              ev = evidence(args[0], args[1] if len(args) > 1 else None)
+              if ev is None:
+                  print("  no render stream visible")
+                  sys.exit(1)
+              fmt(ev, "arm")
+          EXTRACT_PY
           cat > "${RUNNER_TEMP}/audio-gate/run-gate.sh" <<'GATE_SH'
           # Runs inside the SDK container. /redist is the extracted tree,
           # /gate is this scratch directory.
           set -euo pipefail
           PROTON_ROOT=/redist
           OUT=/gate
+          SCRIPTS=/gate
           fail() { echo "::error::$*"; exit 1; }
 
-          # A private runtime dir keeps the daemon off any socket the runner
-          # image or a sibling step might already own.
           export XDG_RUNTIME_DIR=/tmp/pw-ci-run
           export PIPEWIRE_RUNTIME_DIR="$XDG_RUNTIME_DIR"
           export XDG_CONFIG_HOME=/tmp/pw-ci-cfg
           rm -rf "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"
           mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/pipewire/pipewire.conf.d"
           chmod 700 "$XDG_RUNTIME_DIR"
-          cp "$OUT/10-ci-null-sink.conf" "$XDG_CONFIG_HOME/pipewire/pipewire.conf.d/"
+          cp "$SCRIPTS/10-ci-null-sink.conf" "$XDG_CONFIG_HOME/pipewire/pipewire.conf.d/"
 
-          echo "::group::PipeWire runtime the driver will bind to"
           so64="${PROTON_ROOT}/files/lib/wine/x86_64-unix/winepipewire.so"
           test -s "$so64" || fail "redist has no x86_64-unix/winepipewire.so"
-          # If the redist ever started bundling its own libpipewire, this gate
-          # would silently stop testing the platform library it exists to test.
           readelf -d "$so64" | grep -q 'libpipewire-0.3.so.0' \
             || fail "winepipewire.so does not link libpipewire-0.3.so.0"
-          readelf -d "$so64" | grep NEEDED
-          echo "runtime: $(readlink -f /usr/lib/x86_64-linux-gnu/libpipewire-0.3.so.0)"
-          echo "headers: $(pkg-config --modversion libpipewire-0.3 2>/dev/null || echo unknown)"
-          echo "::endgroup::"
 
-          echo "::group::Private PipeWire daemon"
-          pipewire > "$OUT/pipewire-daemon.log" 2>&1 &
+          # Does this build know about the RT dispatch mode at all? Same self-arming
+          # rule the dispatch assertion uses: require the A/B to move only when the
+          # shipped .so actually reads WINEPIPEWIRE_RT.
+          if strings "$so64" | grep -q 'WINEPIPEWIRE_RT'; then RT_CAPABLE=1; else RT_CAPABLE=0; fi
+          echo "driver reads WINEPIPEWIRE_RT: ${RT_CAPABLE}"
+
+          echo "::group::Private PipeWire daemon + session manager"
+          gcc -O1 -o "$OUT/ci-linker" "$SCRIPTS/ci_linker.c" $(pkg-config --cflags --libs libpipewire-0.3) \
+            || fail "ci-linker failed to compile"
+          # pw-top is not in this image, so the negotiated quantum/rate is read from the
+          # server's own graph recalc line. Scope the debug topic so the log stays small.
+          PIPEWIRE_DEBUG=pw.context:D,*:W pipewire > "$OUT/pipewire-daemon.log" 2>&1 &
           pw_pid=$!
-          trap 'kill "$pw_pid" 2>/dev/null || true' EXIT
+          linker_pid=
+          cleanup() { kill "$linker_pid" 2>/dev/null || true; kill "$pw_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
           ready=
           for _ in $(seq 1 60); do
             if timeout 5 pw-dump >/dev/null 2>&1; then ready=1; break; fi
-            kill -0 "$pw_pid" 2>/dev/null \
-              || { cat "$OUT/pipewire-daemon.log"; fail "private pipewire daemon exited during startup"; }
+            kill -0 "$pw_pid" 2>/dev/null || { cat "$OUT/pipewire-daemon.log"; fail "daemon exited during startup"; }
             sleep 0.25
           done
-          [ -n "$ready" ] \
-            || { cat "$OUT/pipewire-daemon.log"; fail "private pipewire daemon never accepted a client within 15s"; }
+          [ -n "$ready" ] || { cat "$OUT/pipewire-daemon.log"; fail "daemon never accepted a client within 15s"; }
           timeout 10 pw-metadata -n default 0 default.audio.sink '{ "name": "ci-null-sink" }' >/dev/null \
             || fail "could not publish default.audio.sink metadata"
-          timeout 10 pw-dump | python3 -c '
-          import json, sys
-          sinks = [o for o in json.load(sys.stdin)
-                   if ((o.get("info") or {}).get("props") or {}).get("media.class") == "Audio/Sink"]
-          for o in sinks:
-              print("sink:", o["id"], ((o.get("info") or {}).get("props") or {}).get("node.name"))
-          sys.exit(0 if sinks else 1)' || fail "private daemon published no Audio/Sink node"
+          # The manager socket is what a session manager connects to: setting PortConfig
+          # on someone else's node needs the permissions the regular socket withholds.
+          PIPEWIRE_REMOTE=pipewire-0-manager "$OUT/ci-linker" ci-null-sink > "$OUT/ci-linker.log" 2>&1 &
+          linker_pid=$!
+          sleep 1
+          grep -q 'sink "ci-null-sink" is node' "$OUT/ci-linker.log" \
+            || { cat "$OUT/ci-linker.log"; fail "session manager never saw the null sink"; }
           echo "::endgroup::"
 
           echo "::group::Scratch wine prefix"
@@ -1057,109 +1565,142 @@ jobs:
           timeout 120 "${PROTON_ROOT}/files/bin/wineserver" -w || true
           echo "::endgroup::"
 
-          # Both word sizes: 32-bit titles are the bulk of the audio bug
-          # reports, and the i386 driver takes its own spa plugin dir path.
+          driver_row() {
+            grep -oE "driver 0x[0-9a-f]+ running:1 [^']*\([0-9]+/[0-9]+\)'ci-null-sink'" "$OUT/pipewire-daemon.log" \
+              | grep -oE "\([0-9]+/[0-9]+\)" | tail -1 | tr -d '()'
+          }
+
+          # run_arm <bits> <label> <rt-value-or-empty>
+          run_arm() {
+            local bits=$1 label=$2 rtval=$3
+            local exe="$OUT/wasapi_render_probe${bits}.exe"
+            local log="$OUT/audio-probe-${bits}-${label}.log"
+            local dump="$OUT/dump-${bits}-${label}.json"
+            local job rc=0 i
+
+            if [ -n "$rtval" ]; then
+              env WINE_AUDIO_DRIVER=pipewire WINEPIPEWIRE_RT="$rtval" WINEDEBUG=+pipewire \
+                timeout 120 "${PROTON_ROOT}/files/bin/wine" "$exe" 7000 > "$log" 2>&1 &
+            else
+              env WINE_AUDIO_DRIVER=pipewire WINEDEBUG=+pipewire \
+                timeout 120 "${PROTON_ROOT}/files/bin/wine" "$exe" 7000 > "$log" 2>&1 &
+            fi
+            job=$!
+            for i in $(seq 1 40); do
+              timeout 6 pw-dump > "$dump" 2>/dev/null || true
+              if python3 "$SCRIPTS/extract.py" "$dump" --ready >/dev/null 2>&1; then break; fi
+              sleep 0.25
+            done
+            # Let latency propagation settle before taking the sample we keep.
+            sleep 2
+            timeout 6 pw-dump > "$dump" 2>/dev/null || true
+            DRIVER_ROW=$(driver_row)
+            wait "$job" || rc=$?
+            ARM_RC=$rc
+          }
+
           status=0
           for bits in 64 32; do
             case "$bits" in
               64) cc=x86_64-w64-mingw32-gcc ;;
               32) cc=i686-w64-mingw32-gcc ;;
             esac
-            exe="$OUT/wasapi_render_probe${bits}.exe"
-            log="$OUT/audio-probe${bits}.log"
-
-            echo "::group::${bits}-bit render probe"
-            "$cc" -O1 -o "$exe" "$OUT/wasapi_render_probe.c" -lole32 -luuid \
+            "$cc" -O1 -o "$OUT/wasapi_render_probe${bits}.exe" "$SCRIPTS/wasapi_render_probe.c" -lole32 -luuid \
               || fail "${bits}-bit probe failed to compile"
 
-            # WINE_AUDIO_DRIVER pins mmdevapi to exactly one driver, so there is
-            # no pulse/alsa fallback that could mask a winepipewire which failed
-            # to initialise. +pipewire turns on every class on the driver's
-            # channel: the version and enumeration lines are TRACE, the dispatch
-            # self-report is WARN.
-            rc=0
-            env WINE_AUDIO_DRIVER=pipewire WINEDEBUG=+pipewire \
-              timeout 180 "${PROTON_ROOT}/files/bin/wine" "$exe" > "$log" 2>&1 || rc=$?
-            echo "probe exit: ${rc}"
+            echo "::group::${bits}-bit render probe (no RT)"
+            run_arm "$bits" nort ""
+            log="$OUT/audio-probe-${bits}-nort.log"
+            echo "probe exit: ${ARM_RC}"
             grep -E '^PROBE-|:pipewire:' "$log" || true
+            echo "server evidence:"
+            python3 "$SCRIPTS/extract.py" "$OUT/dump-${bits}-nort.json" "$DRIVER_ROW" || true
             echo "::endgroup::"
 
-            if [ "$rc" -ne 0 ]; then
-              echo "::error::${bits}-bit WASAPI render probe exited ${rc}"
-              status=1
-              continue
+            if [ "$ARM_RC" -ne 0 ]; then
+              echo "::error::${bits}-bit WASAPI render probe exited ${ARM_RC}"; status=1; continue
             fi
             grep -q '^PROBE-OK ' "$log" \
               || { echo "::error::${bits}-bit probe never reported PROBE-OK"; status=1; continue; }
 
-            # 1. The driver's own runtime-vs-headers report, logged from
-            #    pipewire_process_attach. This is the direct tripwire for the
-            #    silent no-op class described above.
+            # 1. runtime vs headers, the silent -ENOTSUP tripwire.
             vline=$(grep -oE 'PipeWire [0-9][0-9.]*, header [0-9][0-9.]*' "$log" | head -1 || true)
             if [ -z "$vline" ]; then
-              echo "::error::${bits}-bit: driver never logged its PipeWire runtime/header versions, so it did not reach pipewire_process_attach"
-              status=1
-              continue
+              echo "::error::${bits}-bit: driver never logged its PipeWire runtime/header versions"
+              status=1; continue
             fi
             rt_ver=${vline#PipeWire }; rt_ver=${rt_ver%%,*}
             hdr_ver=${vline##*header }
-            echo "${bits}-bit: runtime libpipewire ${rt_ver}, built against headers ${hdr_ver}"
+            echo "${bits}-bit: runtime libpipewire ${rt_ver}, headers ${hdr_ver}"
             if [ "$(printf '%s\n%s\n' "$hdr_ver" "$rt_ver" | sort -V | head -1)" != "$hdr_ver" ]; then
-              echo "::error::${bits}-bit: runtime libpipewire ${rt_ver} is older than the ${hdr_ver} headers the driver was built against; newer inline entry points will silently return -ENOTSUP"
-              status=1
-              continue
+              echo "::error::${bits}-bit: runtime libpipewire ${rt_ver} is older than the ${hdr_ver} headers; newer inline entry points will silently return -ENOTSUP"
+              status=1; continue
             fi
 
-            # 2. The driver walked the real graph and found the published sink.
+            # 2/3. real graph walk and default endpoint resolution.
             grep -q 'add_device .*(ci-null-sink)' "$log" \
-              || { echo "::error::${bits}-bit: driver never enumerated the ci-null-sink node"; status=1; continue; }
-
-            # 3. Default endpoint resolved through the "default" metadata object,
-            #    not the index-0 fallback.
+              || { echo "::error::${bits}-bit: driver never enumerated ci-null-sink"; status=1; continue; }
             grep -qE 'probe for .*: [1-9][0-9]* sinks default="ci-null-sink"' "$log" \
-              || { echo "::error::${bits}-bit: driver did not resolve ci-null-sink as the default render endpoint"; status=1; continue; }
+              || { echo "::error::${bits}-bit: driver did not resolve ci-null-sink as default"; status=1; continue; }
 
-            # 4. Dispatch self-report, logged immediately after pw_stream_connect
-            #    returns success. Only builds carrying wine-cachyos 32257b88b
-            #    emit it, so require it exactly when the shipped .so contains the
-            #    format string. Older pins still gate on 1 to 3 plus the probe,
-            #    where IAudioClient::Initialize succeeding already implies
-            #    pw_stream_connect returned and the stream reached PAUSED.
+            # 4. dispatch self-report. Anchored on the documented-stable prefix only:
+            #    the field list after it has already been extended once (node.async).
             if strings "$so64" | grep -q 'audio dispatch: '; then
-              if grep -qE 'audio dispatch: render requested .*, effective .*, loop ' "$log"; then
-                echo "${bits}-bit: $(grep -oE 'audio dispatch: render requested .*' "$log" | head -1)"
+              if grep -qE 'audio dispatch: (render|capture) requested ' "$log"; then
+                echo "${bits}-bit: $(grep -oE 'audio dispatch: .*' "$log" | head -1)"
               else
                 echo "::error::${bits}-bit: driver ships the dispatch self-report but never logged it, so pw_stream_connect was not reached"
-                status=1
-                continue
+                status=1; continue
               fi
             else
-              echo "::warning::${bits}-bit: this wine build predates the audio dispatch self-report (wine-cachyos 32257b88b)"
+              echo "::warning::${bits}-bit: build predates the audio dispatch self-report (wine-cachyos 32257b88b)"
             fi
 
-            # 5. Nothing on the driver's channel may be an error, and a dispatch
-            #    MISMATCH means the requested mode was not the one in force.
+            # 5. no error-level line and no dispatch mismatch.
             if grep -qE ':err:pipewire:|MISMATCH' "$log"; then
               echo "::error::${bits}-bit: driver logged an error or a dispatch mismatch"
               grep -E ':err:pipewire:|MISMATCH' "$log"
-              status=1
-              continue
+              status=1; continue
             fi
 
-            # rendered/padding is reported, not asserted: draining needs a
-            # session manager to link the stream to the sink, and the image
-            # ships no wireplumber. Reaching connect is what this gate proves.
-            echo "${bits}-bit: $(grep '^PROBE-OK ' "$log")"
+            # 6. NEW: the graph actually consumed the stream. Only meaningful now that a
+            #    session manager links it; an unlinked stream never drains a frame.
+            rendered=$(grep -oE 'PROBE-OK rendered=[0-9]+' "$log" | grep -oE '[0-9]+' | head -1)
+            bufsz=$(grep -oE 'PROBE-BUFFER [0-9]+' "$log" | grep -oE '[0-9]+' | head -1)
+            if [ -z "$rendered" ] || [ -z "$bufsz" ] || [ "$rendered" -le "$bufsz" ]; then
+              echo "::error::${bits}-bit: render stream never drained past its first buffer (rendered=${rendered:-?} buffer=${bufsz:-?}); the graph is not consuming"
+              status=1; continue
+            fi
+            echo "${bits}-bit: drained ${rendered} frames through a ${bufsz} frame buffer"
+
+            # ---- RT dispatch property A/B ----------------------------------------
+            # Checks that WINEPIPEWIRE_RT flips the node/link async PROPERTIES the
+            # server reports. Deliberately not a latency measurement: see the
+            # NOT SHOWN / TO CERTIFY lines the comparison prints.
+            echo "::group::${bits}-bit RT dispatch property A/B (node.async, link.async)"
+            run_arm "$bits" rt 1
+            rtlog="$OUT/audio-probe-${bits}-rt.log"
+            echo "RT arm probe exit: ${ARM_RC}"
+            grep -oE 'audio dispatch: .*' "$rtlog" | head -1 || true
+            if [ "$ARM_RC" -ne 0 ]; then
+              echo "::error::${bits}-bit: RT arm probe exited ${ARM_RC}"; status=1; echo "::endgroup::"; continue
+            fi
+            set +e
+            python3 "$SCRIPTS/extract.py" --compare \
+              "$OUT/dump-${bits}-nort.json" "$OUT/dump-${bits}-rt.json" \
+              "$DRIVER_ROW" "$DRIVER_ROW" --rt-capable "$RT_CAPABLE"
+            cmp_rc=$?
+            set -e
+            echo "::endgroup::"
+            [ "$cmp_rc" -eq 0 ] || status=1
           done
+
           exit "$status"
           GATE_SH
           chmod +x "${RUNNER_TEMP}/audio-gate/run-gate.sh"
-          # No de-indent pass here: the YAML block scalar already strips this
-          # step's common indent, so each heredoc body lands with exactly the
-          # relative indentation it is written with above.
-          head -3 "${RUNNER_TEMP}/audio-gate/run-gate.sh"
+          wc -l "${RUNNER_TEMP}"/audio-gate/*
 
-      - name: Render probe against a private PipeWire daemon
+      - name: Render probe and RT dispatch property A/B against a private PipeWire daemon
         env:
           PROTON_ROOT: ${{ steps.extract.outputs.root }}
         run: |
@@ -1181,7 +1722,9 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ needs.version.outputs.build_name }}.audio-gate-logs
-          path: ${{ runner.temp }}/audio-gate/*.log
+          path: |
+            ${{ runner.temp }}/audio-gate/*.log
+            ${{ runner.temp }}/audio-gate/*.json
           if-no-files-found: warn
 
   release:
