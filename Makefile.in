@@ -1994,9 +1994,22 @@ $(PROTON37_TRACKED_FILES_TARGET): $(addprefix $(SRCDIR)/,proton_3.7_tracked_file
 USER_SETTINGS_PY_TARGET := $(addprefix $(DST_BASE)/,user_settings.sample.py)
 $(USER_SETTINGS_PY_TARGET): $(addprefix $(SRCDIR)/,user_settings.sample.py)
 
+# Both ship next to build-info.txt, so a tester holding only the tarball has
+# the tool and the instructions for it. The script names driver struct fields,
+# so travelling with the build it was written against keeps it from drifting
+# out of step with the .so it decodes. It still needs the separate
+# driver-debug artifact, and refuses rather than emit a partial report.
+PIPEWIRE_CRASH_REPORT_TARGET := $(addprefix $(DST_BASE)/,pipewire-crash-report.sh)
+$(PIPEWIRE_CRASH_REPORT_TARGET): $(addprefix $(SRCDIR)/,pipewire-crash-report.sh)
+
+ZZZ_TESTER_RECIPE_TARGET := $(addprefix $(DST_BASE)/,zzz-tester-recipe.md)
+$(ZZZ_TESTER_RECIPE_TARGET): $(addprefix $(SRCDIR)/,zzz-tester-recipe.md)
+
 DIST_COPY_TARGETS := $(FILELOCK_TARGET) $(PROTON_PY_TARGET) \
                      $(VULKAN_BINDINGS_TARGET) $(UTILITIES_TARGET) \
-                     $(PROTON37_TRACKED_FILES_TARGET) $(USER_SETTINGS_PY_TARGET)
+                     $(PROTON37_TRACKED_FILES_TARGET) $(USER_SETTINGS_PY_TARGET) \
+                     $(PIPEWIRE_CRASH_REPORT_TARGET) \
+                     $(ZZZ_TESTER_RECIPE_TARGET)
 
 ifeq ($(ENABLE_WOW64),1)
 USER_SETTINGS_WOW64_PY_TARGET := $(addprefix $(DST_BASE)/,user_settings.py)

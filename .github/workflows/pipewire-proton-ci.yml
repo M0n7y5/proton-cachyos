@@ -557,7 +557,11 @@ jobs:
           # Optional-but-included revision fingerprint (update when driver log strings change).
           # Matches WARN text from core-reconnect invalidate path in pipewire.c
           # ("invalidating %u live stream(s)..."). Bump the pattern when that message is reworded.
-          if ! strings "$so64" | grep -qE 'invalidating .* live stream'; then
+          # grep -a on the file, not `strings ... | grep -q`. Under `set -o
+          # pipefail` that pipeline is a race: grep -q exits on the first match,
+          # strings takes SIGPIPE and returns 141, and the whole pipeline reads
+          # as failure exactly when the string IS present.
+          if ! grep -qaE 'invalidating .* live stream' "$so64"; then
             echo "::error::x86_64 winepipewire.so lacks expected driver fingerprint string"
             echo "::error::update the fingerprint grep if the driver log message changed deliberately"
             exit 1
@@ -1665,8 +1669,6 @@ jobs:
           # Does this build know about the RT dispatch mode at all? Same self-arming
           # rule the dispatch assertion uses: require the A/B to move only when the
           # shipped .so actually reads WINEPIPEWIRE_RT.
-          if strings "$so64" | grep -q 'WINEPIPEWIRE_RT'; then RT_CAPABLE=1; else RT_CAPABLE=0; fi
-          echo "driver reads WINEPIPEWIRE_RT: ${RT_CAPABLE}"
 
           echo "::group::Private PipeWire daemon + session manager"
           gcc -O1 -o "$OUT/ci-linker" "$SCRIPTS/ci_linker.c" $(pkg-config --cflags --libs libpipewire-0.3) \
@@ -1746,6 +1748,15 @@ jobs:
               64) cc=x86_64-w64-mingw32-gcc ;;
               32) cc=i686-w64-mingw32-gcc ;;
             esac
+            # Probe the .so for THIS arch. Checking the 64 bit driver while testing
+            # the 32 bit one gates each arm on the other arm's capabilities.
+            case "$bits" in
+              64) so_arch="${PROTON_ROOT}/files/lib/wine/x86_64-unix/winepipewire.so" ;;
+              32) so_arch="${PROTON_ROOT}/files/lib/wine/i386-unix/winepipewire.so" ;;
+            esac
+            test -s "$so_arch" || fail "${bits}-bit: no winepipewire.so in the redist"
+            if grep -qaF 'WINEPIPEWIRE_RT' "$so_arch"; then RT_CAPABLE=1; else RT_CAPABLE=0; fi
+            echo "${bits}-bit: driver reads WINEPIPEWIRE_RT: ${RT_CAPABLE}"
             "$cc" -O1 -o "$OUT/wasapi_render_probe${bits}.exe" "$SCRIPTS/wasapi_render_probe.c" -lole32 -luuid \
               || fail "${bits}-bit probe failed to compile"
 
@@ -1786,7 +1797,7 @@ jobs:
 
             # 4. dispatch self-report. Anchored on the documented-stable prefix only:
             #    the field list after it has already been extended once (node.async).
-            if strings "$so64" | grep -q 'audio dispatch: '; then
+            if grep -qaF 'audio dispatch: ' "$so_arch"; then
               if grep -qE 'audio dispatch: (render|capture) requested ' "$log"; then
                 echo "${bits}-bit: $(grep -oE 'audio dispatch: .*' "$log" | head -1)"
               else
