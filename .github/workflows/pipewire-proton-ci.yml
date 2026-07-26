@@ -625,8 +625,19 @@ jobs:
             mkdir -p "${DEBUG}/${arch}-unix"
             dbg="${DEBUG}/${arch}-unix/winepipewire.so.debug"
             objcopy --only-keep-debug "$unstripped" "$dbg" || { fail "${arch}: --only-keep-debug failed"; echo "::endgroup::"; continue; }
+
+            # dist installs the driver read only, and --add-gnu-debuglink
+            # rewrites it in place. Read the mode back rather than assuming a
+            # value, so a later dist change is preserved instead of overwritten.
+            mode=$(stat -c%a "$shipped")
+            chmod u+w "$shipped" || { fail "${arch}: cannot make the shipped .so writable"; echo "::endgroup::"; continue; }
             # Basename only, which is what gdb looks for next to the .so.
-            objcopy --add-gnu-debuglink="$dbg" "$shipped" || { fail "${arch}: --add-gnu-debuglink failed"; echo "::endgroup::"; continue; }
+            objcopy --add-gnu-debuglink="$dbg" "$shipped" || { fail "${arch}: --add-gnu-debuglink failed"; chmod "$mode" "$shipped"; echo "::endgroup::"; continue; }
+            chmod "$mode" "$shipped"
+            now=$(stat -c%a "$shipped")
+            if [ "$now" != "$mode" ]; then
+              fail "${arch}: shipped .so left as mode ${now}, expected ${mode}; testers must get what dist intended"
+            fi
 
             if readelf -S "$shipped" | grep -qE '\.debug_'; then
               fail "${arch}: shipped .so still carries .debug_* sections; the tarball would balloon"
