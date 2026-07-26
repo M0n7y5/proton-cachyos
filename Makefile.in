@@ -986,6 +986,36 @@ WINE_AUTOCONF_ARGS += \
   --with-pcap \
   --without-oss \
 
+# Debug info for the PipeWire driver, and only for it.
+#
+# The driver leaves post-mortem breadcrumbs for a user's core dump: a
+# per-stream cb_mark holding (callback count << 2 | phase), the global
+# rt_render, and a walkable g_streams list. Reading those by name needs DWARF
+# types. Nothing else here passes -g, so a default build ships the .so with
+# .symtab and no .debug_* at all: function names and frame-pointer unwinding
+# survive a core, nothing else does. UNSTRIPPED_BUILD=1 adds -ggdb globally
+# across Wine, which is not shippable, and -g1 gives line tables without the
+# types cb_mark needs.
+#
+# dlls/winepipewire.drv is the only Makefile.in in Wine that reads
+# PIPEWIRE_CFLAGS (UNIX_CFLAGS = $(PIPEWIRE_CFLAGS)), so appending -ggdb3 to it
+# reaches exactly one object file. Setting the variable suppresses Wine's own
+# pkg-config lookup, hence re-supplying that output below, per arch: x86_64
+# links the SteamRT libpipewire and i386 links the one steamrtdeps builds.
+# rules-common.mk exports PKG_CONFIG_PATH to configure through `env`, which is
+# after these substitutions run, so the i386 path is spelled out. A wrong path
+# fails at configure with "libpipewire-0.3 1.2.0 or later development files
+# not found" rather than dropping -ggdb3 silently.
+#
+# The .so becomes ~1.8 MB rather than ~140 KB, and none of that ships:
+# rules-common.mk's dist step strips lib/ on the way into the redist. CI lifts
+# the .debug out of the pre-dist tree, re-attaches a .gnu_debuglink and
+# publishes the .debug files as their own artifact, gating on gdb resolving
+# struct pipewire_stream through the link.
+#
+# Appended per arch below rather than to WINE_AUTOCONF_ARGS here, because
+# WINE_x86_64_AUTOCONF_ARGS is a plain `=` assignment further down.
+
 WINE_x86_64_AUTOCONF_ARGS = \
   --enable-archs=$(call list-join,$(comma),x86_64 $(filter-out x86_64 $(unix_ARCHS),$(windows_ARCHS))) \
   --enable-win64 \
@@ -1004,6 +1034,21 @@ WINE_x86_64_AUTOCONF_ARGS += \
 WINE_VKD3D_DEPENDENCY = vkd3d
 endif
 endif
+
+# See the PIPEWIRE_CFLAGS note above the arch blocks. Both unix arches build
+# the driver, so both need the flag, and each needs its own pkg-config view.
+#
+# PKG_CONFIG_LIBDIR pins the search to one arch. Without it a bare pkg-config
+# run falls back to the default path and hands the i386 build the amd64
+# libpipewire-0.3.pc, silently. Pinned, a missing .pc yields empty cflags and
+# configure then fails the pipewire header check loudly, which is what we want.
+# These mirror the PKG_CONFIG_PATH/PKG_CONFIG_LIBDIR that rules-common.mk
+# hands configure; they are repeated because the command substitution runs
+# before `env` applies them.
+WINE_x86_64_AUTOCONF_ARGS += \
+  PIPEWIRE_CFLAGS="$$(PKG_CONFIG_LIBDIR=/usr/lib/$(x86_64-unix_LIBDIR)/pkgconfig:/usr/share/pkgconfig pkg-config --cflags libpipewire-0.3) -ggdb3"
+WINE_i386_AUTOCONF_ARGS += \
+  PIPEWIRE_CFLAGS="$$(PKG_CONFIG_PATH=$(PIPEWIRE_i386_LIBDIR)/$(i386-unix_LIBDIR)/pkgconfig PKG_CONFIG_LIBDIR=/usr/lib/$(i386-unix_LIBDIR)/pkgconfig:/usr/share/pkgconfig pkg-config --cflags libpipewire-0.3) -ggdb3"
 
 ifneq ($(WITHOUT_TTS),1)
 WINE_DEPENDS = gst_orc gstreamer gst_base ffmpeg openfst kaldi vosk

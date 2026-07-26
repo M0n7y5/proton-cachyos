@@ -564,6 +564,125 @@ jobs:
           fi
           echo "OK: driver fingerprint 'invalidating .* live stream' present in x86_64 .so"
 
+          # Driver debug info: split out, gate that it decodes, stage it.
+          # dist strips lib/ on the way into the redist, so the DWARF survives
+          # only in build/dst-wine-*/. Lift it out, re-attach a .gnu_debuglink
+          # to the copy testers download, and check gdb still reads the crash
+          # breadcrumbs through that link. In the SDK container for gdb and a
+          # matching objcopy; the image is already pulled by this point.
+          mkdir -p "${PWD}/debug-out"
+          cat > "${work}/gate-debug.sh" <<'DBG_GATE'
+          #!/bin/bash
+          # Runs inside the SDK container.
+          #   /redist  extracted redist tree (proton's dist has already stripped it)
+          #   /build   proton build tree, where the unstripped driver still lives
+          #   /debug   output dir for the split .debug files
+          #
+          # A .debug_info section existing is not enough: a type lookup has to
+          # succeed through the .gnu_debuglink and show cb_mark.
+          set -uo pipefail
+          REDIST=${REDIST:-/redist}
+          BUILD=${BUILD:-/build}
+          DEBUG=${DEBUG:-/debug}
+          status=0
+          fail() { echo "::error::$*"; status=1; }
+
+          for arch in x86_64 i386; do
+            echo "::group::${arch} driver debug info"
+            shipped="${REDIST}/files/lib/wine/${arch}-unix/winepipewire.so"
+            if [ ! -s "$shipped" ]; then
+              fail "${arch}: redist has no ${arch}-unix/winepipewire.so"
+              echo "::endgroup::"; continue
+            fi
+
+            # rules-common.mk's dist step runs objcopy --strip-debug over everything
+            # under lib/ on the way into the redist, so the DWARF only survives in the
+            # wine install tree that dist copied from.
+            unstripped=$(find "$BUILD" -path "*/dst-wine-${arch}/lib/wine/${arch}-unix/winepipewire.so" -print -quit 2>/dev/null)
+            if [ -z "$unstripped" ]; then
+              fail "${arch}: no pre-dist winepipewire.so under ${BUILD}; cannot lift debug info"
+              echo "::endgroup::"; continue
+            fi
+
+            if ! readelf -S "$unstripped" | grep -q '\.debug_info'; then
+              fail "${arch}: pre-dist winepipewire.so carries no .debug_info, so the PIPEWIRE_CFLAGS -ggdb3 hook did not take effect"
+              echo "::endgroup::"; continue
+            fi
+
+            # The .debug is worthless if it does not describe the binary we ship.
+            id_s=$(readelf -n "$shipped"    | grep -oE 'Build ID: [0-9a-f]+' | head -1)
+            id_u=$(readelf -n "$unstripped" | grep -oE 'Build ID: [0-9a-f]+' | head -1)
+            if [ -z "$id_s" ] || [ "$id_s" != "$id_u" ]; then
+              fail "${arch}: build ID mismatch between shipped (${id_s:-none}) and pre-dist (${id_u:-none}) driver"
+              echo "::endgroup::"; continue
+            fi
+            echo "${arch}: ${id_s}, shipped and pre-dist agree"
+
+            mkdir -p "${DEBUG}/${arch}-unix"
+            dbg="${DEBUG}/${arch}-unix/winepipewire.so.debug"
+            objcopy --only-keep-debug "$unstripped" "$dbg" || { fail "${arch}: --only-keep-debug failed"; echo "::endgroup::"; continue; }
+            # Basename only, which is what gdb looks for next to the .so.
+            objcopy --add-gnu-debuglink="$dbg" "$shipped" || { fail "${arch}: --add-gnu-debuglink failed"; echo "::endgroup::"; continue; }
+
+            if readelf -S "$shipped" | grep -qE '\.debug_'; then
+              fail "${arch}: shipped .so still carries .debug_* sections; the tarball would balloon"
+            fi
+            if ! readelf -S "$shipped" | grep -q '\.symtab'; then
+              fail "${arch}: shipped .so lost .symtab; function-name backtraces would regress"
+            fi
+            if ! readelf -S "$shipped" | grep -q '\.gnu_debuglink'; then
+              fail "${arch}: shipped .so has no .gnu_debuglink section"
+            fi
+            echo "${arch}: shipped $(stat -c%s "$shipped") bytes, debug $(stat -c%s "$dbg") bytes"
+
+            # THE gate. An isolated directory holding nothing but the two files, so
+            # nothing on the image can satisfy the lookup by accident, and a negative
+            # control first so a passing ptype cannot be a false positive.
+            iso=$(mktemp -d)
+            cp "$shipped" "$iso/winepipewire.so"
+            if gdb -batch -ex 'ptype struct pipewire_stream' "$iso/winepipewire.so" 2>&1 | grep -q 'cb_mark'; then
+              fail "${arch}: negative control failed, the stripped .so resolved the type on its own"
+            fi
+            cp "$dbg" "$iso/winepipewire.so.debug"
+
+            out=$(gdb -batch \
+              -ex 'ptype struct pipewire_stream' \
+              -ex 'print sizeof(struct pipewire_stream)' \
+              -ex 'print &((struct pipewire_stream *)0)->cb_mark' \
+              -ex 'info variables ^g_streams$' \
+              -ex 'info variables ^rt_render$' \
+              "$iso/winepipewire.so" 2>&1)
+            rm -rf "$iso"
+
+            missing=
+            for want in 'cb_mark' 'cb_seq' 'struct list entry'; do
+              echo "$out" | grep -q "$want" || missing="${missing} ${want}"
+            done
+            echo "$out" | grep -qE 'g_streams' || missing="${missing} g_streams"
+            echo "$out" | grep -qE 'rt_render' || missing="${missing} rt_render"
+            if [ -n "$missing" ]; then
+              fail "${arch}: gdb could not decode the crash breadcrumbs, missing:${missing}"
+              echo "$out" | head -20
+            else
+              echo "${arch}: gdb decodes struct pipewire_stream through the debuglink"
+              echo "$out" | grep -E 'cb_mark|cb_seq|^\$[0-9]|g_streams|rt_render' | sed 's/^/    /'
+            fi
+            echo "::endgroup::"
+          done
+
+          exit "$status"
+          DBG_GATE
+          docker run --rm -u "$(id -u):$(id -g)" \
+            -v "${root}:/redist" \
+            -v "${PWD}/build:/build:ro" \
+            -v "${PWD}/debug-out:/debug" \
+            -v "${work}:/gate:ro" \
+            "$STEAMRT_IMAGE" \
+            bash /gate/gate-debug.sh
+          dbg64=$(stat -c%s "${PWD}/debug-out/x86_64-unix/winepipewire.so.debug")
+          dbg32=$(stat -c%s "${PWD}/debug-out/i386-unix/winepipewire.so.debug")
+          echo "debug artifact: x86_64 ${dbg64} bytes, i386 ${dbg32} bytes"
+
           sha64=$(sha256sum "$so64" | awk '{print $1}')
           sha32=$(sha256sum "$so32" | awk '{print $1}')
           echo "winepipewire_x86_64_sha256=${sha64}"
@@ -582,6 +701,9 @@ jobs:
             echo "built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "winepipewire_x86_64_unix_sha256=${sha64}"
             echo "winepipewire_i386_unix_sha256=${sha32}"
+            echo "winepipewire_x86_64_unix_debug_bytes=${dbg64}"
+            echo "winepipewire_i386_unix_debug_bytes=${dbg32}"
+            echo "debug_artifact=${BUILD_NAME}.driver-debug"
           } | tee "$info_path"
 
           # Pack metadata into the redist tree and refresh the tarball + checksum
@@ -603,6 +725,14 @@ jobs:
             echo "|---|---|"
             echo "| x86_64-unix | \`${sha64}\` |"
             echo "| i386-unix | \`${sha32}\` |"
+            echo "| x86_64-unix .debug | \`${dbg64}\` bytes |"
+            echo "| i386-unix .debug | \`${dbg32}\` bytes |"
+            echo ""
+            echo "Debug info is split: the tarball ships the driver stripped of"
+            echo "\`.debug_*\` with a \`.gnu_debuglink\`, and the matching \`.debug\`"
+            echo "files are the \`${BUILD_NAME}.driver-debug\` artifact. CI has already"
+            echo "asserted that \`gdb -batch -ex 'ptype struct pipewire_stream'\` resolves"
+            echo "\`cb_mark\` through that link on both arches."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save ccache
@@ -631,6 +761,17 @@ jobs:
         with:
           name: ${{ needs.version.outputs.build_name }}.build-info.txt
           path: build/${{ needs.version.outputs.build_name }}.build-info.txt
+          if-no-files-found: error
+
+      # Kept out of the tarball on purpose: testers download that, and these
+      # are ~1.6 MB per arch against a ~130 KB driver. A developer handed a
+      # user's core pulls this artifact, drops the .debug next to the .so from
+      # the same run, and gdb resolves it by .gnu_debuglink.
+      - name: Upload driver debug info
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ needs.version.outputs.build_name }}.driver-debug
+          path: debug-out/**/winepipewire.so.debug
           if-no-files-found: error
 
   # Smoke gate, two layers:
