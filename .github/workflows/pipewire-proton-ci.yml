@@ -59,6 +59,10 @@ on:
           receive the bits that passed the gates rather than a rebuild of the
           same inputs. Requires release_tag. Nothing is built, so wine_sha,
           wine_ref, variant and runner are ignored when this is set.
+          The run must have preserved its source commit under
+          refs/ci-builds/<run_id>, which every gated run does. Runs from before
+          that landed cannot be promoted, because there is no way to show the
+          release tag points at the source that built them.
         type: string
         required: false
         default: ''
@@ -2076,6 +2080,56 @@ jobs:
             ${{ runner.temp }}/audio-gate/*.json
           if-no-files-found: warn
 
+  # Keep the commit that produced this run's artifacts alive, so a promotion
+  # months later can tag the source that actually built them.
+  #
+  # Placement is the whole design. It cannot live in the build job: the smoke
+  # and audio gates run after build, so a ref pushed there would preserve
+  # commits whose driver never opened audio, and promotion would happily ship
+  # them. It takes the release job's dependency set instead, so the ref exists
+  # only for a run that passed every gate, and it runs for every such run
+  # rather than only for releases, because which run gets promoted is decided
+  # later by a human who installed it and played something.
+  #
+  # refs/ci-builds/* is outside refs/heads, so rebasing or re-signing the
+  # branch cannot orphan what it points at. That is the property promotion
+  # relies on, and the reason a release tag can always resolve to real source.
+  preserve:
+    name: Preserve the source commit
+    needs: [version, build, smoke, audio]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Push refs/ci-builds/${{ github.run_id }}
+        env:
+          PROTON_SHA: ${{ needs.build.outputs.proton_sha }}
+        run: |
+          set -euo pipefail
+          # Take the SHA the build job recorded, not github.sha, so the ref and
+          # build-info can never disagree about what was built.
+          if ! git cat-file -e "${PROTON_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::build job reported proton_sha ${PROTON_SHA}, which is not a commit in this checkout"
+            exit 1
+          fi
+          ref="refs/ci-builds/${GITHUB_RUN_ID}"
+          git push origin "${PROTON_SHA}:${ref}"
+          echo "preserved ${PROTON_SHA} at ${ref}"
+          {
+            echo "### Source preserved"
+            echo ""
+            echo "\`${ref}\` -> \`${PROTON_SHA}\`"
+            echo ""
+            echo "This run can be promoted later with:"
+            echo ""
+            echo '```bash'
+            echo "gh workflow run pipewire-proton-ci.yml -R ${GITHUB_REPOSITORY} \\"
+            echo "  --ref ${GITHUB_REF_NAME} -f promote_run_id=${GITHUB_RUN_ID} -f release_tag=<tag>"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   release:
     name: GitHub Release
     needs: [version, build, smoke, audio]
@@ -2290,10 +2344,31 @@ jobs:
           (cd dist && sha512sum -c "${name}.sha512sum")
           echo "checksum verified against the artifact as downloaded"
 
+          # The release tag has to resolve to the source that produced these
+          # bits. A branch can be rebased or re-signed after a build, which
+          # orphans the build commit, so the build itself preserved it under
+          # refs/ci-builds/<run_id> once its gates passed. That ref is outside
+          # refs/heads, so rewriting the branch cannot orphan it.
+          info_sha=$(grep '^proton_sha=' "$info" | cut -d= -f2-)
+          preserved="refs/ci-builds/${RUN_ID}"
+          if ! git fetch -q origin "+${preserved}:${preserved}" 2>/dev/null; then
+            echo "::error::run ${RUN_ID} has no preserved source ref at ${preserved}"
+            echo "::error::the run predates source preservation, so the commit it was built from cannot be shown to still exist"
+            echo "::error::rebuild and promote the new run; tagging anything else would point the release at source that did not produce these artifacts"
+            exit 1
+          fi
+          preserved_sha=$(git rev-parse "${preserved}")
+          if [[ "$preserved_sha" != "$info_sha" ]]; then
+            echo "::error::${preserved} points at ${preserved_sha} but build-info records ${info_sha}"
+            echo "::error::the preserved ref does not describe this artifact; refusing"
+            exit 1
+          fi
+          echo "source commit preserved and reachable: ${info_sha}"
+
           {
             echo "name=${name}"
             echo "run_url=${run_url}"
-            echo "proton_sha=$(grep '^proton_sha=' "$info" | cut -d= -f2-)"
+            echo "proton_sha=${info_sha}"
             echo "tag=${TAG//[[:space:]]/}"
           } >> "$GITHUB_OUTPUT"
 
@@ -2306,23 +2381,15 @@ jobs:
           PROTON_SHA: ${{ steps.src.outputs.proton_sha }}
         run: |
           set -euo pipefail
-          # Tag the proton commit the artifacts were built from, not whatever
-          # this dispatch happens to be running. A rebase or a force push can
-          # orphan that commit after the build; the artifacts are still the
-          # tested ones, so publish them and say plainly that the tag is only a
-          # handle. build-info carries the real build commit either way.
-          tag_caveat=""
-          if git cat-file -e "${PROTON_SHA}^{commit}" 2>/dev/null; then
-            tag_target="$PROTON_SHA"
-          else
-            tag_target="$GITHUB_SHA"
-            tag_caveat="This tag points at ${GITHUB_SHA}. The commit these artifacts were built from, ${PROTON_SHA}, is no longer reachable in this repository, so the tag is a handle rather than the build point. build-info.txt below records the real one."
-            echo "::warning::proton_sha ${PROTON_SHA} is unreachable, probably rewritten; tagging ${GITHUB_SHA} and saying so in the notes"
-          fi
+          # Tag the commit that produced these artifacts, never a stand-in.
+          # The preserve job pushed refs/ci-builds/<run_id> at that commit when
+          # the build passed its gates, and the verify step above already
+          # fetched it and checked it against build-info, so it is reachable
+          # here no matter what happened to the branch since.
           if ! git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" "$tag_target" -m "$TAG"
+            git tag -a "$TAG" "$PROTON_SHA" -m "$TAG"
             git push origin "refs/tags/${TAG}"
           fi
 
@@ -2332,10 +2399,6 @@ jobs:
             echo "These are the artifacts that were tested, byte for byte, not a rebuild."
             echo ""
             echo "Source run: ${RUN_URL}"
-            if [[ -n "$tag_caveat" ]]; then
-              echo ""
-              echo "> ${tag_caveat}"
-            fi
             echo ""
             echo "Extract under \`~/.steam/root/compatibilitytools.d/\` and restart Steam."
             echo ""
