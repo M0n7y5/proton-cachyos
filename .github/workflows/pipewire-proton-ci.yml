@@ -52,6 +52,16 @@ on:
         type: string
         required: false
         default: ''
+      promote_run_id:
+        description: >-
+          Publish the artifacts of an EXISTING successful run as a prerelease,
+          without rebuilding. This is how a tested build reaches a tester: they
+          receive the bits that passed the gates rather than a rebuild of the
+          same inputs. Requires release_tag. Nothing is built, so wine_sha,
+          wine_ref, variant and runner are ignored when this is set.
+        type: string
+        required: false
+        default: ''
       variant:
         description: >-
           Micro-architecture of the single build cell, taken verbatim from the
@@ -118,6 +128,10 @@ env:
 jobs:
   version:
     name: Version
+    # Promotion republishes an existing run, so the whole build chain is
+    # skipped. Everything downstream needs this job, so skipping here skips
+    # build, both smoke jobs and the release job with it.
+    if: ${{ !inputs.promote_run_id }}
     runs-on: ubuntu-latest
     outputs:
       full_desc: ${{ steps.version.outputs.full_desc }}
@@ -162,12 +176,11 @@ jobs:
               echo "::error::wine_sha and wine_ref are mutually exclusive; wine_sha builds one immutable commit, wine_ref pairs a moving branch with the tree's pin"
               exit 1
             fi
-            # Releases stay on the immutable arm: a synthesized merge is not a
-            # thing anyone can fetch later by SHA.
-            if [[ "${{ inputs.publish_release }}" == "true" || "${{ github.ref_type }}" == "tag" ]]; then
-              echo "::error::wine_ref cannot publish a release; dispatch the resulting wine_sha through wine_sha instead"
-              exit 1
-            fi
+            # A tag push carries no inputs, so a ref build can never be one.
+            # publish_release IS allowed: the merge commit is ephemeral, but
+            # both its parents are permanent and its tree is deterministic, so
+            # the release states the pin, the ref tip and the tree hash and
+            # ships the recipe that rebuilds the same tree.
             if [[ "$wine_ref_input" == -* ]]; then
               echo "::error::wine_ref must be a branch, tag or SHA (got: ${wine_ref_input})"
               exit 1
@@ -223,6 +236,12 @@ jobs:
       wine_sha: ${{ steps.wine-pin.outputs.wine_sha }}
       wine_source: ${{ steps.wine-pin.outputs.wine_source }}
       proton_sha: ${{ steps.wine-pin.outputs.proton_sha }}
+      # The pairing a release has to state: both parents are permanent and the
+      # tree is deterministic, even when the merge commit between them is not.
+      wine_ref_name: ${{ steps.wine-pin.outputs.wine_ref_name }}
+      wine_ref_sha: ${{ steps.wine-pin.outputs.wine_ref_sha }}
+      submodule_pin_sha: ${{ steps.wine-pin.outputs.submodule_pin_sha }}
+      wine_tree: ${{ steps.wine-pin.outputs.wine_tree }}
       # The audio gate has to enter the same SDK image the driver was compiled
       # in, and that tag only exists after configure. Publish what the ccache
       # identifier already read back out of the generated Makefile so the two
@@ -461,11 +480,17 @@ jobs:
             wine_source="submodule-pin"
           fi
 
+          # The tree is what a release can promise. A synthesized merge commit
+          # is ephemeral, but re-merging the same two parents reproduces this
+          # hash exactly, which is what makes the pairing verifiable.
+          wine_tree=$(git -C "$wine_path" rev-parse 'HEAD^{tree}')
+
           {
             echo "wine_sha=$wine_sha"
             echo "wine_source=$wine_source"
             echo "wine_ref_name=$wine_ref"
             echo "wine_ref_sha=$ref_sha"
+            echo "wine_tree=$wine_tree"
             echo "wine_url_effective=$wine_url_effective"
           } >> "$GITHUB_OUTPUT"
 
@@ -482,6 +507,7 @@ jobs:
             echo "| wine_sha | \`${wine_sha}\` |"
             echo "| wine_source | \`${wine_source}\` |"
             echo "| submodule_pin | \`${pin_sha}\` |"
+            echo "| wine_tree | \`${wine_tree}\` |"
             if [[ -n "$wine_ref" ]]; then
               echo "| wine_ref | \`${wine_ref}\` |"
               echo "| wine_ref_sha | \`${ref_sha}\` |"
@@ -656,6 +682,7 @@ jobs:
           WINE_REF: ${{ steps.wine-pin.outputs.wine_ref_name }}
           WINE_REF_SHA: ${{ steps.wine-pin.outputs.wine_ref_sha }}
           WINE_PIN: ${{ steps.wine-pin.outputs.submodule_pin_sha }}
+          WINE_TREE: ${{ steps.wine-pin.outputs.wine_tree }}
           WINE_URL_EFFECTIVE: ${{ steps.wine-pin.outputs.wine_url_effective }}
           WINE_URL_CONFIGURED: ${{ steps.wine-pin.outputs.wine_url_configured }}
           STEAMRT_IMAGE: ${{ steps.ccache-id.outputs.image }}
@@ -864,6 +891,7 @@ jobs:
             echo "wine_ref=${WINE_REF:-}"
             echo "wine_ref_sha=${WINE_REF_SHA:-}"
             echo "wine_submodule_pin=${WINE_PIN}"
+            echo "wine_tree=${WINE_TREE}"
             # The URL the wine tree was actually fetched from. wine_url_configured
             # is what .gitmodules names, which is not the same thing whenever a
             # ref or SHA only the fork serves was dispatched.
@@ -2076,6 +2104,10 @@ jobs:
           WINE_SHA: ${{ needs.build.outputs.wine_sha }}
           WINE_SOURCE: ${{ needs.build.outputs.wine_source }}
           PROTON_SHA: ${{ needs.build.outputs.proton_sha }}
+          WINE_REF: ${{ needs.build.outputs.wine_ref_name }}
+          WINE_REF_SHA: ${{ needs.build.outputs.wine_ref_sha }}
+          WINE_PIN: ${{ needs.build.outputs.submodule_pin_sha }}
+          WINE_TREE: ${{ needs.build.outputs.wine_tree }}
         run: |
           set -euo pipefail
           if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
@@ -2101,6 +2133,23 @@ jobs:
               echo "- proton_sha: \`${PROTON_SHA}\`"
               echo "- wine_sha: \`${WINE_SHA}\` (${WINE_SOURCE})"
             fi
+            if [[ "$WINE_SOURCE" == "ref-merged-onto-pin" ]]; then
+              echo ""
+              echo "## Reconstructing this wine tree"
+              echo ""
+              echo "The merge commit was synthesized in the runner and is not"
+              echo "pushed anywhere, so \`${WINE_SHA}\` cannot be fetched. Both"
+              echo "of its parents are permanent and its tree is deterministic,"
+              echo "so the build is reproducible from them:"
+              echo ""
+              echo '```bash'
+              echo "git checkout ${WINE_PIN}"
+              echo "git merge --no-ff ${WINE_REF_SHA}   # ${WINE_REF}"
+              echo '```'
+              echo ""
+              echo "The resulting tree must hash to \`${WINE_TREE}\`."
+              echo "The merge commit SHA will differ; it carries a timestamp."
+            fi
           } > "$notes_file"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -2125,3 +2174,184 @@ jobs:
             assets+=("${NAME}.build-info.txt")
           fi
           gh release upload "$TAG" "${assets[@]}" --clobber
+
+  # Distribution path for a build that already passed the gates. The tester
+  # receives the exact bits that were tested, not a rebuild from the same
+  # inputs: a rebuild is a different artifact, and nothing here re-runs a gate
+  # that would catch it having drifted. Nothing is built, so this needs no
+  # runner time beyond the download and no secrets beyond GITHUB_TOKEN.
+  promote:
+    name: Promote a tested run
+    if: ${{ inputs.promote_run_id }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify the source run and collect its artifacts
+        id: src
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ inputs.promote_run_id }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::promote_run_id must be a numeric run id (got: ${RUN_ID})"
+            exit 1
+          fi
+          if [[ -z "${TAG//[[:space:]]/}" ]]; then
+            echo "::error::release_tag is required when promoting a run; it names the download testers will fetch"
+            exit 1
+          fi
+
+          if ! meta=$(gh run view "$RUN_ID" -R "$GITHUB_REPOSITORY" \
+                        --json status,conclusion,workflowName,url,headSha 2>/dev/null); then
+            echo "::error::run ${RUN_ID} not found in ${GITHUB_REPOSITORY}"
+            exit 1
+          fi
+          run_status=$(jq -r .status <<<"$meta")
+          run_concl=$(jq -r .conclusion <<<"$meta")
+          run_wf=$(jq -r .workflowName <<<"$meta")
+          run_url=$(jq -r .url <<<"$meta")
+          echo "source run: ${run_url}"
+
+          # Promoting another workflow's artifacts would ship bits these gates
+          # never looked at.
+          if [[ "$run_wf" != "$GITHUB_WORKFLOW" ]]; then
+            echo "::error::run ${RUN_ID} belongs to workflow '${run_wf}', not '${GITHUB_WORKFLOW}'"
+            exit 1
+          fi
+          if [[ "$run_status" != "completed" || "$run_concl" != "success" ]]; then
+            echo "::error::run ${RUN_ID} is ${run_status}/${run_concl}; only a completed successful run can be promoted"
+            echo "::error::a failed run may have skipped the smoke or audio gate entirely"
+            exit 1
+          fi
+
+          arts=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" --paginate \
+                   --jq '.artifacts[] | [.name, (.expired|tostring)] | @tsv')
+          if [[ -z "$arts" ]]; then
+            echo "::error::run ${RUN_ID} has no artifacts left; they were deleted or the retention window closed"
+            echo "::error::rebuild from the same inputs and promote the new run"
+            exit 1
+          fi
+          if awk -F'\t' '$2=="true"{found=1} END{exit !found}' <<<"$arts"; then
+            echo "::error::run ${RUN_ID} has expired artifacts, so the tested bits no longer exist:"
+            awk -F'\t' '$2=="true"{print "::error::  " $1}' <<<"$arts"
+            echo "::error::rebuild from the same inputs and promote the new run"
+            exit 1
+          fi
+
+          tarname=$(awk -F'\t' '$1 ~ /\.tar\.xz$/ {print $1; exit}' <<<"$arts")
+          if [[ -z "$tarname" ]]; then
+            echo "::error::run ${RUN_ID} produced no .tar.xz artifact; there is nothing to hand a tester"
+            exit 1
+          fi
+          name="${tarname%.tar.xz}"
+          echo "artifact set: ${name}"
+
+          mkdir -p incoming dist
+          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -D incoming
+
+          tarball=$(find incoming -name "${name}.tar.xz" -print -quit)
+          sums=$(find incoming -name "${name}.sha512sum" -print -quit)
+          info=$(find incoming -name "${name}.build-info.txt" -print -quit)
+          for f in tarball sums info; do
+            if [[ -z "${!f}" ]]; then
+              echo "::error::run ${RUN_ID} is missing its ${f} artifact; refusing to publish an incomplete set"
+              exit 1
+            fi
+          done
+
+          # build-info is the provenance that travels with the download, so a
+          # release without it is not worth publishing.
+          for k in build_name proton_sha wine_sha wine_source; do
+            if ! grep -q "^${k}=" "$info"; then
+              echo "::error::build-info.txt carries no ${k}; refusing to publish a build whose provenance is incomplete"
+              exit 1
+            fi
+          done
+          bn=$(grep '^build_name=' "$info" | cut -d= -f2-)
+          if [[ "$bn" != "$name" ]]; then
+            echo "::error::build-info build_name '${bn}' does not match the artifact '${name}'; the set is inconsistent"
+            exit 1
+          fi
+
+          cp "$tarball" "$sums" "$info" dist/
+          (cd dist && sha512sum -c "${name}.sha512sum")
+          echo "checksum verified against the artifact as downloaded"
+
+          {
+            echo "name=${name}"
+            echo "run_url=${run_url}"
+            echo "proton_sha=$(grep '^proton_sha=' "$info" | cut -d= -f2-)"
+            echo "tag=${TAG//[[:space:]]/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.src.outputs.tag }}
+          NAME: ${{ steps.src.outputs.name }}
+          RUN_URL: ${{ steps.src.outputs.run_url }}
+          PROTON_SHA: ${{ steps.src.outputs.proton_sha }}
+        run: |
+          set -euo pipefail
+          # Tag the proton commit the artifacts were built from, not whatever
+          # this dispatch happens to be running.
+          if ! git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
+            if ! git cat-file -e "${PROTON_SHA}^{commit}" 2>/dev/null; then
+              echo "::error::proton_sha ${PROTON_SHA} from build-info is not in this repository"
+              exit 1
+            fi
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" "$PROTON_SHA" -m "$TAG"
+            git push origin "refs/tags/${TAG}"
+          fi
+
+          notes=$(mktemp)
+          {
+            echo "Promoted from a run that passed the build, wine smoke and audio gates."
+            echo "These are the artifacts that were tested, byte for byte, not a rebuild."
+            echo ""
+            echo "Source run: ${RUN_URL}"
+            echo ""
+            echo "Extract under \`~/.steam/root/compatibilitytools.d/\` and restart Steam."
+            echo ""
+            echo "## Build metadata"
+            echo ""
+            echo '```'
+            cat "dist/${NAME}.build-info.txt"
+            echo '```'
+          } > "$notes"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --prerelease --latest=false --notes-file "$notes"
+          else
+            gh release create "$TAG" \
+              --prerelease \
+              --latest=false \
+              --title "Proton-CachyOS-PipeWire $TAG" \
+              --notes-file "$notes"
+          fi
+          gh release upload "$TAG" \
+            "dist/${NAME}.tar.xz" \
+            "dist/${NAME}.sha512sum" \
+            "dist/${NAME}.build-info.txt" --clobber
+
+          {
+            echo "### Promoted"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| tag | \`${TAG}\` |"
+            echo "| artifact | \`${NAME}.tar.xz\` |"
+            echo "| source run | ${RUN_URL} |"
+            echo "| proton_sha | \`${PROTON_SHA}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
