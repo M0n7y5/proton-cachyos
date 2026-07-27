@@ -66,6 +66,14 @@ on:
         type: string
         required: false
         default: ''
+      promote_prerelease:
+        description: >-
+          Mark a promoted release as a prerelease. Default true, so promoting
+          stays a low stakes act. Set false for a drop meant for testers, which
+          also makes it the repository's latest release.
+        type: boolean
+        required: false
+        default: true
       variant:
         description: >-
           Micro-architecture of the single build cell, taken verbatim from the
@@ -2344,6 +2352,19 @@ jobs:
           (cd dist && sha512sum -c "${name}.sha512sum")
           echo "checksum verified against the artifact as downloaded"
 
+          # A crash report is unreadable without the split debug info, and the
+          # run artifact expires. Ship it with the release so the pairing
+          # outlives the retention window.
+          dbgdir=$(find incoming -type d -name "${name}.driver-debug" -print -quit)
+          if [[ -n "$dbgdir" ]] && find "$dbgdir" -type f -name '*.debug' | grep -q .; then
+            (cd "$dbgdir" && zip -qr - .) > "dist/${name}.driver-debug.zip"
+            echo "driver-debug packaged: $(find "$dbgdir" -type f -name '*.debug' | wc -l) files"
+            echo "has_debug=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::run ${RUN_ID} has no driver-debug artifact; crash reports from this build cannot decode driver field names"
+            echo "has_debug=0" >> "$GITHUB_OUTPUT"
+          fi
+
           # The release tag has to resolve to the source that produced these
           # bits. A branch can be rebased or re-signed after a build, which
           # orphans the build commit, so the build itself preserved it under
@@ -2372,13 +2393,15 @@ jobs:
             echo "tag=${TAG//[[:space:]]/}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Publish prerelease
+      - name: Publish release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.src.outputs.tag }}
           NAME: ${{ steps.src.outputs.name }}
           RUN_URL: ${{ steps.src.outputs.run_url }}
           PROTON_SHA: ${{ steps.src.outputs.proton_sha }}
+          HAS_DEBUG: ${{ steps.src.outputs.has_debug }}
+          PRERELEASE: ${{ inputs.promote_prerelease }}
         run: |
           set -euo pipefail
           # Tag the commit that produced these artifacts, never a stand-in.
@@ -2393,35 +2416,95 @@ jobs:
             git push origin "refs/tags/${TAG}"
           fi
 
+          info="dist/${NAME}.build-info.txt"
+          get() { grep "^$1=" "$info" | cut -d= -f2- || true; }
+          wine_ref=$(get wine_ref); wine_ref_sha=$(get wine_ref_sha)
+          wine_pin=$(get wine_submodule_pin); wine_tree=$(get wine_tree)
+          wine_url=$(get wine_url); wine_source=$(get wine_source)
+
           notes=$(mktemp)
           {
-            echo "Promoted from a run that passed the build, wine smoke and audio gates."
-            echo "These are the artifacts that were tested, byte for byte, not a rebuild."
+            echo "Proton with the PipeWire audio driver, for testing."
+            echo ""
+            echo "Extract into \`~/.steam/root/compatibilitytools.d/\`, restart Steam,"
+            echo "then pick it per game under Properties, Compatibility."
+            echo ""
+            echo "## If you are here to report something"
+            echo ""
+            echo "Two files ship inside the tarball, at its top level:"
+            echo ""
+            echo "- \`zzz-tester-recipe.md\` explains what to try and what is worth reporting."
+            echo "  Read it first; it is short and it says plainly what this build is testing."
+            echo "- \`pipewire-crash-report.sh\` turns a crash into a text report you can post."
+            echo "  It never uploads anything and it keeps your core dump on your machine."
+            echo ""
+            if [[ "$HAS_DEBUG" == "1" ]]; then
+              echo "If the script asks for debug info, download \`${NAME}.driver-debug.zip\`"
+              echo "from the assets below, unzip it, and pass it with \`--debug /path/to/unzipped\`."
+              echo "Field names in the report cannot be decoded without it."
+            fi
+            echo ""
+            echo "## What is in it"
+            echo ""
+            if [[ -n "$wine_ref" ]]; then
+              echo "Built from the wine branch \`${wine_ref}\` at \`${wine_ref_sha}\`,"
+              echo "paired with the proton tree's wine submodule pin \`${wine_pin}\`."
+              echo "Source: ${wine_url}"
+            else
+              echo "Built from wine \`$(get wine_sha)\` (${wine_source})."
+            fi
+            echo ""
+            echo "Every gate passed before this was published: the driver loads and opens a"
+            echo "render stream against a real PipeWire daemon on both 64 and 32 bit, and"
+            echo "reports the dispatch mode it actually got rather than the one it asked for."
             echo ""
             echo "Source run: ${RUN_URL}"
             echo ""
-            echo "Extract under \`~/.steam/root/compatibilitytools.d/\` and restart Steam."
-            echo ""
+            if [[ "$wine_source" == "ref-merged-onto-pin" ]]; then
+              echo "## Reproducing the wine tree"
+              echo ""
+              echo "The merge was made in the runner and is not pushed anywhere, so its"
+              echo "commit cannot be fetched. Both parents are permanent and the tree is"
+              echo "deterministic, so this rebuilds it exactly:"
+              echo ""
+              echo '```bash'
+              echo "git clone ${wine_url} && cd wine-cachyos"
+              echo "git checkout ${wine_pin}"
+              echo "git merge --no-ff ${wine_ref_sha}"
+              echo "git rev-parse 'HEAD^{tree}'   # must print ${wine_tree}"
+              echo '```'
+              echo ""
+              echo "The merge commit SHA will differ from run to run; it carries a timestamp."
+              echo "The tree will not."
+              echo ""
+            fi
             echo "## Build metadata"
             echo ""
             echo '```'
-            cat "dist/${NAME}.build-info.txt"
+            cat "$info"
             echo '```'
           } > "$notes"
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --prerelease --latest=false --notes-file "$notes"
+          create_args=(--title "Proton-CachyOS-PipeWire $TAG" --notes-file "$notes")
+          if [[ "$PRERELEASE" == "false" ]]; then
+            create_args+=(--latest)
           else
-            gh release create "$TAG" \
-              --prerelease \
-              --latest=false \
-              --title "Proton-CachyOS-PipeWire $TAG" \
-              --notes-file "$notes"
+            create_args+=(--prerelease --latest=false)
           fi
-          gh release upload "$TAG" \
-            "dist/${NAME}.tar.xz" \
-            "dist/${NAME}.sha512sum" \
-            "dist/${NAME}.build-info.txt" --clobber
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$notes" \
+              --prerelease="${PRERELEASE}" --latest="$([[ "$PRERELEASE" == "false" ]] && echo true || echo false)"
+          else
+            gh release create "$TAG" "${create_args[@]}"
+          fi
+
+          assets=("dist/${NAME}.tar.xz" "dist/${NAME}.sha512sum" "dist/${NAME}.build-info.txt")
+          # Not `[[ ... ]] && assets+=(...)`: under set -e a false test would end
+          # the step with a success-looking exit before anything is uploaded.
+          if [[ "$HAS_DEBUG" == "1" ]]; then
+            assets+=("dist/${NAME}.driver-debug.zip")
+          fi
+          gh release upload "$TAG" "${assets[@]}" --clobber
 
           {
             echo "### Promoted"
