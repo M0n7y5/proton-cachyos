@@ -2258,9 +2258,13 @@ jobs:
           mkdir -p incoming dist
           gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -D incoming
 
-          tarball=$(find incoming -name "${name}.tar.xz" -print -quit)
-          sums=$(find incoming -name "${name}.sha512sum" -print -quit)
-          info=$(find incoming -name "${name}.build-info.txt" -print -quit)
+          # gh run download unpacks each artifact into a directory named after
+          # it, so incoming/<name>.tar.xz is a directory holding <name>.tar.xz.
+          # Without -type f the directory matches first and every later read of
+          # the path fails as a directory.
+          tarball=$(find incoming -type f -name "${name}.tar.xz" -print -quit)
+          sums=$(find incoming -type f -name "${name}.sha512sum" -print -quit)
+          info=$(find incoming -type f -name "${name}.build-info.txt" -print -quit)
           for f in tarball sums info; do
             if [[ -z "${!f}" ]]; then
               echo "::error::run ${RUN_ID} is missing its ${f} artifact; refusing to publish an incomplete set"
