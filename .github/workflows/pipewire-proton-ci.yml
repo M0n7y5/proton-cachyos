@@ -45,6 +45,8 @@ on:
           the tarball. If the ref already contains the pin it is built verbatim;
           otherwise CI checks out the pin and merges the ref with --no-ff, and
           fails with the conflicting paths if that does not apply cleanly.
+          Resolved against the fork first, then the configured submodule URL,
+          because a branch name is not unique across the two remotes.
           Mutually exclusive with wine_sha, which stays the immutable arm and is
           the only one that can publish a release.
         type: string
@@ -387,24 +389,31 @@ jobs:
             # branch, dispatch this, install the tarball. Pairing the branch
             # with the tree's pin is CI's job, not a merge to hand-craft before
             # every run. Releases still go through the immutable wine_sha arm.
-            echo "Fetching wine ref '${wine_ref}' from configured submodule URL: ${wine_url_configured}"
-            if git -C "$wine_path" fetch --no-tags "$wine_url_configured" "$wine_ref"; then
-              wine_url_effective="$wine_url_configured"
+            # Fork first, which is the opposite of the immutable arm above and
+            # deliberate. A SHA is globally unique, so whichever remote serves
+            # it hands over the same commit. A branch name is not: CachyOS
+            # carries cachyos_11.0_release/_upstream_pipewire too, and theirs is
+            # the stale 6cab070d the pin already absorbed. This input exists to
+            # build the fork's branch, so ask the fork first and fall back to
+            # the configured remote for branches only CachyOS has.
+            echo "Fetching wine ref '${wine_ref}' from ${wine_fallback_url}"
+            if git -C "$wine_path" fetch --no-tags "$wine_fallback_url" "$wine_ref"; then
+              wine_url_effective="$wine_fallback_url"
             else
-              echo "::warning::ref '${wine_ref}' not served by configured submodule URL; trying ${wine_fallback_url}"
-              if ! git -C "$wine_path" fetch --no-tags "$wine_fallback_url" "$wine_ref"; then
-                echo "::error::wine ref '${wine_ref}' is unavailable from both ${wine_url_configured} and ${wine_fallback_url}"
+              echo "::warning::ref '${wine_ref}' not served by ${wine_fallback_url}; trying ${wine_url_configured}"
+              if ! git -C "$wine_path" fetch --no-tags "$wine_url_configured" "$wine_ref"; then
+                echo "::error::wine ref '${wine_ref}' is unavailable from both ${wine_fallback_url} and ${wine_url_configured}"
                 echo "::error::check the spelling and that the branch is pushed; a tag or a full SHA is accepted here too"
                 exit 1
               fi
-              wine_url_effective="$wine_fallback_url"
+              wine_url_effective="$wine_url_configured"
             fi
             ref_sha=$(git -C "$wine_path" rev-parse FETCH_HEAD)
             echo "Fetched wine ref '${wine_ref}' -> ${ref_sha} from ${wine_url_effective}"
 
             if git -C "$wine_path" merge-base --is-ancestor "$ref_sha" "$pin_sha"; then
-              echo "::error::the pin ${pin_sha} already contains ref '${wine_ref}' (${ref_sha})"
-              echo "::error::nothing to pair - dispatch with wine_ref and wine_sha both empty to build the pin"
+              echo "::error::the pin ${pin_sha} already contains ref '${wine_ref}' (${ref_sha}), served by ${wine_url_effective}"
+              echo "::error::nothing to pair. Either the branch has not been pushed and a same-named branch on the other remote answered instead, or the pin has absorbed this work already."
               exit 1
             fi
 
