@@ -165,9 +165,23 @@ jobs:
           WINE_REF_IN: ${{ inputs.wine_ref || '' }}
         run: |
           set -euo pipefail
-          if git describe --tags --abbrev=0 >/dev/null 2>&1; then
-            full_desc=$(git describe --long --tags)
+          # Match upstream's snapshot base tags only. An unconstrained describe
+          # takes whatever tag sits nearest, so any tag anyone pushes silently
+          # renames the build, and the build name is the directory Steam shows
+          # a tester. Our own release tags do it too: once a release exists,
+          # the next build describes from it at distance 0.
+          #
+          # Verified on a full clone of this repo at d9411709: unconstrained
+          # gave pipewire-11.0-20260727-slr-0-g..., and flipped again to a
+          # planted pipewire-11.0-29991231-slr-0-g..., while the constrained
+          # form held at cachyos-11.0-20260713-base-207-g... throughout.
+          # A tag deliberately impersonating cachyos-*-base still wins; that is
+          # the remaining hole and it needs intent, not an accident.
+          DESC_MATCH='cachyos-*-base'
+          if git describe --tags --abbrev=0 --match "$DESC_MATCH" >/dev/null 2>&1; then
+            full_desc=$(git describe --long --tags --match "$DESC_MATCH")
           else
+            echo "::warning::no ${DESC_MATCH} tag is reachable; the build name falls back to a bare SHA"
             full_desc="0.0-g$(git rev-parse --short HEAD)"
           fi
           echo "full_desc=$full_desc" >> "$GITHUB_OUTPUT"
