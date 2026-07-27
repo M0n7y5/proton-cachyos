@@ -38,6 +38,18 @@ on:
         type: string
         required: false
         default: ''
+      wine_ref:
+        description: >-
+          Wine branch, tag or SHA to pair with the proton tree's wine submodule
+          pin. Use this for driver iteration: push the branch, dispatch, install
+          the tarball. If the ref already contains the pin it is built verbatim;
+          otherwise CI checks out the pin and merges the ref with --no-ff, and
+          fails with the conflicting paths if that does not apply cleanly.
+          Mutually exclusive with wine_sha, which stays the immutable arm and is
+          the only one that can publish a release.
+        type: string
+        required: false
+        default: ''
       variant:
         description: >-
           Micro-architecture of the single build cell, taken verbatim from the
@@ -84,7 +96,7 @@ on:
   #   types: [build-proton-with-wine]
 
 concurrency:
-  group: pw-proton-${{ github.ref_name }}-${{ inputs.wine_sha || 'pin' }}-${{ inputs.variant || 'x86_64_v3' }}-${{ inputs.runner || 'default' }}
+  group: pw-proton-${{ github.ref_name }}-${{ inputs.wine_sha || inputs.wine_ref || 'pin' }}-${{ inputs.variant || 'x86_64_v3' }}-${{ inputs.runner || 'default' }}
   cancel-in-progress: true
 
 # Least privilege default: jobs only get a read-capable GITHUB_TOKEN.
@@ -111,6 +123,7 @@ jobs:
       release_tag: ${{ steps.version.outputs.release_tag }}
       do_release: ${{ steps.version.outputs.do_release }}
       wine_sha_input: ${{ steps.version.outputs.wine_sha_input }}
+      wine_ref_input: ${{ steps.version.outputs.wine_ref_input }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -121,6 +134,7 @@ jobs:
         shell: bash
         env:
           WINE_SHA_IN: ${{ inputs.wine_sha || '' }}
+          WINE_REF_IN: ${{ inputs.wine_ref || '' }}
         run: |
           set -euo pipefail
           if git describe --tags --abbrev=0 >/dev/null 2>&1; then
@@ -140,6 +154,25 @@ jobs:
           fi
           echo "wine_sha_input=$wine_sha_input" >> "$GITHUB_OUTPUT"
 
+          wine_ref_input="${WINE_REF_IN//[[:space:]]/}"
+          if [[ -n "$wine_ref_input" ]]; then
+            if [[ -n "$wine_sha_input" ]]; then
+              echo "::error::wine_sha and wine_ref are mutually exclusive; wine_sha builds one immutable commit, wine_ref pairs a moving branch with the tree's pin"
+              exit 1
+            fi
+            # Releases stay on the immutable arm: a synthesized merge is not a
+            # thing anyone can fetch later by SHA.
+            if [[ "${{ inputs.publish_release }}" == "true" || "${{ github.ref_type }}" == "tag" ]]; then
+              echo "::error::wine_ref cannot publish a release; dispatch the resulting wine_sha through wine_sha instead"
+              exit 1
+            fi
+            if [[ "$wine_ref_input" == -* ]]; then
+              echo "::error::wine_ref must be a branch, tag or SHA (got: ${wine_ref_input})"
+              exit 1
+            fi
+          fi
+          echo "wine_ref_input=$wine_ref_input" >> "$GITHUB_OUTPUT"
+
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             tag="${{ github.ref_name }}"
             build_name="${BUILD_PREFIX}-${tag}-${PROTON_VARIANT}"
@@ -149,6 +182,16 @@ jobs:
             tag="${{ inputs.release_tag }}"
             if [[ -n "$wine_sha_input" ]]; then
               build_name="${BUILD_PREFIX}-${full_desc}-wine${wine_sha_input:0:8}-${PROTON_VARIANT}"
+            elif [[ -n "$wine_ref_input" ]]; then
+              # The tip SHA is not known until the build job resolves the ref,
+              # so name the build after the ref. Steam reads this as a directory
+              # under compatibilitytools.d, so keep it to one path component and
+              # to characters a directory name can hold.
+              ref_slug="${wine_ref_input##*/}"
+              ref_slug="${ref_slug//[^A-Za-z0-9._-]/-}"
+              ref_slug="${ref_slug#-}"
+              ref_slug="${ref_slug:0:24}"
+              build_name="${BUILD_PREFIX}-${full_desc}-wineref-${ref_slug}-${PROTON_VARIANT}"
             else
               build_name="${BUILD_PREFIX}-${full_desc}-${PROTON_VARIANT}"
             fi
@@ -162,7 +205,11 @@ jobs:
           fi
           echo "build_name=$build_name" >> "$GITHUB_OUTPUT"
           echo "build_name=$build_name"
-          echo "wine_sha_input=${wine_sha_input:-<submodule pin>}"
+          echo "wine_sha_input=${wine_sha_input:-<none>}"
+          echo "wine_ref_input=${wine_ref_input:-<none>}"
+          if [[ -z "$wine_sha_input" && -z "$wine_ref_input" ]]; then
+            echo "wine source: submodule pin"
+          fi
           echo "variant=${PROTON_VARIANT}"
 
   build:
@@ -252,23 +299,35 @@ jobs:
         id: wine-pin
         env:
           WINE_SHA_INPUT: ${{ needs.version.outputs.wine_sha_input }}
+          WINE_REF_INPUT: ${{ needs.version.outputs.wine_ref_input }}
         run: |
           set -euo pipefail
           proton_sha=$(git rev-parse HEAD)
           echo "proton_sha=$proton_sha" >> "$GITHUB_OUTPUT"
 
-          wine_url=$(git config -f .gitmodules --get submodule.wine.url)
+          wine_url_configured=$(git config -f .gitmodules --get submodule.wine.url)
           wine_fallback_url=https://github.com/M0n7y5/wine-cachyos.git
           wine_path=$(git config -f .gitmodules --get submodule.wine.path)
-          test -n "$wine_url"
+          test -n "$wine_url_configured"
           test -n "$wine_path"
           test -d "$wine_path"
 
+          # Two different questions. wine_url_configured is what .gitmodules
+          # names; wine_url_effective is where the tree actually came from.
+          # They diverge whenever a dispatched ref or SHA lives only on the
+          # fork, and build-info records the effective one so the artifact
+          # never credits a repository that served nothing.
+          wine_url_effective="$wine_url_configured"
+          # The immutable-SHA arm below names this in its own messages.
+          wine_url="$wine_url_configured"
+          ref_sha=""
+
           pin_sha=$(git -C "$wine_path" rev-parse HEAD)
           echo "submodule_pin_sha=$pin_sha" >> "$GITHUB_OUTPUT"
-          echo "wine_url=$wine_url" >> "$GITHUB_OUTPUT"
+          echo "wine_url_configured=$wine_url_configured" >> "$GITHUB_OUTPUT"
 
           override="${WINE_SHA_INPUT//[[:space:]]/}"
+          wine_ref="${WINE_REF_INPUT//[[:space:]]/}"
           if [[ -n "$override" ]]; then
             if [[ ! "$override" =~ ^[0-9a-f]{40}$ ]]; then
               echo "::error::wine_sha must be full 40-char lowercase hex (got: ${override})"
@@ -322,6 +381,72 @@ jobs:
               exit 1
             fi
             wine_source="dispatch-override"
+            wine_url_effective="$fetched_url"
+          elif [[ -n "$wine_ref" ]]; then
+            # Branch mode, for the iterate-on-the-driver loop: push to the wine
+            # branch, dispatch this, install the tarball. Pairing the branch
+            # with the tree's pin is CI's job, not a merge to hand-craft before
+            # every run. Releases still go through the immutable wine_sha arm.
+            echo "Fetching wine ref '${wine_ref}' from configured submodule URL: ${wine_url_configured}"
+            if git -C "$wine_path" fetch --no-tags "$wine_url_configured" "$wine_ref"; then
+              wine_url_effective="$wine_url_configured"
+            else
+              echo "::warning::ref '${wine_ref}' not served by configured submodule URL; trying ${wine_fallback_url}"
+              if ! git -C "$wine_path" fetch --no-tags "$wine_fallback_url" "$wine_ref"; then
+                echo "::error::wine ref '${wine_ref}' is unavailable from both ${wine_url_configured} and ${wine_fallback_url}"
+                echo "::error::check the spelling and that the branch is pushed; a tag or a full SHA is accepted here too"
+                exit 1
+              fi
+              wine_url_effective="$wine_fallback_url"
+            fi
+            ref_sha=$(git -C "$wine_path" rev-parse FETCH_HEAD)
+            echo "Fetched wine ref '${wine_ref}' -> ${ref_sha} from ${wine_url_effective}"
+
+            if git -C "$wine_path" merge-base --is-ancestor "$ref_sha" "$pin_sha"; then
+              echo "::error::the pin ${pin_sha} already contains ref '${wine_ref}' (${ref_sha})"
+              echo "::error::nothing to pair - dispatch with wine_ref and wine_sha both empty to build the pin"
+              exit 1
+            fi
+
+            if git -C "$wine_path" merge-base --is-ancestor "$pin_sha" "$ref_sha"; then
+              # Fast path, same result as the immutable arm: the branch already
+              # sits on the pin, so build it verbatim and synthesize nothing.
+              git -C "$wine_path" checkout --detach --force "$ref_sha"
+              wine_sha="$ref_sha"
+              wine_source="ref-contains-pin"
+              echo "OK: ref '${wine_ref}' (${ref_sha}) already contains pin ${pin_sha}"
+            else
+              # Diverged, which is the normal state a month after the branch was
+              # cut: CachyOS moved the pin underneath it. Build the pairing a
+              # maintainer would otherwise produce by hand, in the runner.
+              merge_base=$(git -C "$wine_path" merge-base "$pin_sha" "$ref_sha")
+              pin_ahead=$(git -C "$wine_path" rev-list --count "${merge_base}..${pin_sha}")
+              ref_ahead=$(git -C "$wine_path" rev-list --count "${merge_base}..${ref_sha}")
+              echo "CachyOS has advanced the pin by ${pin_ahead} commits since this branch left the shared base ${merge_base}."
+              echo "The branch carries ${ref_ahead} commits of its own. Synthesizing the pairing with a --no-ff merge."
+              git -C "$wine_path" checkout --detach --force "$pin_sha"
+              if ! git -C "$wine_path" \
+                   -c user.name='proton-cachyos CI' \
+                   -c user.email='ci@users.noreply.github.com' \
+                   -c commit.gpgsign=false \
+                   merge --no-ff --no-edit \
+                   -m "CI: pair ${wine_ref} (${ref_sha}) with wine pin ${pin_sha}" "$ref_sha"; then
+                echo "::error::auto-merge conflict pairing ref '${wine_ref}' (${ref_sha}) with wine pin ${pin_sha}"
+                echo "::error::conflicting paths:"
+                git -C "$wine_path" diff --name-only --diff-filter=U | while read -r conflicted; do
+                  echo "::error::  ${conflicted}"
+                done
+                echo "::error::CI does not resolve conflicts. Rebase '${wine_ref}' onto ${pin_sha}, push, then dispatch again."
+                echo "::error::If the branch is already current, CachyOS edited the same lines and the conflict is real."
+                git -C "$wine_path" merge --abort || true
+                exit 1
+              fi
+              wine_sha=$(git -C "$wine_path" rev-parse HEAD)
+              wine_source="ref-merged-onto-pin"
+              echo "OK: synthesized merge ${wine_sha} = pin ${pin_sha} + ref '${wine_ref}' (${ref_sha})"
+              echo "Reproduce it with: git checkout ${pin_sha} && git merge --no-ff ${ref_sha}"
+              echo "The merge commit SHA differs per run because it carries a timestamp; its tree does not."
+            fi
           else
             wine_sha="$pin_sha"
             wine_source="submodule-pin"
@@ -329,6 +454,9 @@ jobs:
 
           echo "wine_sha=$wine_sha" >> "$GITHUB_OUTPUT"
           echo "wine_source=$wine_source" >> "$GITHUB_OUTPUT"
+          echo "wine_ref_name=$wine_ref" >> "$GITHUB_OUTPUT"
+          echo "wine_ref_sha=$ref_sha" >> "$GITHUB_OUTPUT"
+          echo "wine_url_effective=$wine_url_effective" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Wine pin"
@@ -336,10 +464,17 @@ jobs:
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| proton_sha | \`${proton_sha}\` |"
-            echo "| wine_url | \`${wine_url}\` |"
+            echo "| wine_url | \`${wine_url_effective}\` |"
+            if [[ "$wine_url_effective" != "$wine_url_configured" ]]; then
+              echo "| wine_url_configured | \`${wine_url_configured}\` |"
+            fi
             echo "| wine_sha | \`${wine_sha}\` |"
             echo "| wine_source | \`${wine_source}\` |"
             echo "| submodule_pin | \`${pin_sha}\` |"
+            if [[ -n "$wine_ref" ]]; then
+              echo "| wine_ref | \`${wine_ref}\` |"
+              echo "| wine_ref_sha | \`${ref_sha}\` |"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           echo "Effective wine_sha=${wine_sha} (${wine_source})"
@@ -507,6 +642,11 @@ jobs:
           WINE_SHA: ${{ steps.wine-pin.outputs.wine_sha }}
           WINE_SOURCE: ${{ steps.wine-pin.outputs.wine_source }}
           PROTON_SHA: ${{ steps.wine-pin.outputs.proton_sha }}
+          WINE_REF: ${{ steps.wine-pin.outputs.wine_ref_name }}
+          WINE_REF_SHA: ${{ steps.wine-pin.outputs.wine_ref_sha }}
+          WINE_PIN: ${{ steps.wine-pin.outputs.submodule_pin_sha }}
+          WINE_URL_EFFECTIVE: ${{ steps.wine-pin.outputs.wine_url_effective }}
+          WINE_URL_CONFIGURED: ${{ steps.wine-pin.outputs.wine_url_configured }}
           STEAMRT_IMAGE: ${{ steps.ccache-id.outputs.image }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -710,7 +850,14 @@ jobs:
             echo "proton_ref=${{ github.ref }}"
             echo "wine_sha=${WINE_SHA}"
             echo "wine_source=${WINE_SOURCE}"
-            echo "wine_url=$(git config -f .gitmodules --get submodule.wine.url)"
+            echo "wine_ref=${WINE_REF:-}"
+            echo "wine_ref_sha=${WINE_REF_SHA:-}"
+            echo "wine_submodule_pin=${WINE_PIN}"
+            # The URL the wine tree was actually fetched from. wine_url_configured
+            # is what .gitmodules names, which is not the same thing whenever a
+            # ref or SHA only the fork serves was dispatched.
+            echo "wine_url=${WINE_URL_EFFECTIVE}"
+            echo "wine_url_configured=${WINE_URL_CONFIGURED}"
             echo "steamrt_image=${STEAMRT_IMAGE}"
             echo "workflow_run=${RUN_URL}"
             echo "built_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
