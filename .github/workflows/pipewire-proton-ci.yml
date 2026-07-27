@@ -2482,20 +2482,39 @@ jobs:
             echo '```'
           } > "$notes"
 
-          create_args=(--target "$PROTON_SHA" --title "Proton-CachyOS-PipeWire $TAG" --notes-file "$notes")
-          if [[ "$PRERELEASE" == "false" ]]; then
-            create_args+=(--latest)
+          # Two ways the tag can come to exist, and CI validates rather than
+          # assumes either. Normally the build commit is still the branch tip
+          # and the releases API creates the tag at it. Once the workflow has
+          # changed since the build, no GITHUB_TOKEN can create that ref at
+          # all, and the only way through is a human pushing the tag with
+          # credentials that carry the workflow scope. Either way the tag is
+          # read back and has to land on the build commit.
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "tag ${TAG} already exists; using it"
           else
-            create_args+=(--prerelease --latest=false)
+            create_args=(--target "$PROTON_SHA" --title "Proton-CachyOS-PipeWire $TAG" --notes-file "$notes")
+            if [[ "$PRERELEASE" == "false" ]]; then
+              create_args+=(--latest)
+            else
+              create_args+=(--prerelease --latest=false)
+            fi
+            if ! gh release create "$TAG" "${create_args[@]}"; then
+              echo "::error::could not create ${TAG} at ${PROTON_SHA}"
+              echo "::error::GITHUB_TOKEN cannot create a ref whose commit carries workflow files differing from the branch tip, and the workflow has changed since this build"
+              echo "::error::push the tag yourself, then dispatch this again:"
+              echo "::error::  git tag -a ${TAG} ${PROTON_SHA} -m ${TAG} && git push origin refs/tags/${TAG}"
+              exit 1
+            fi
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --notes-file "$notes" \
               --prerelease="${PRERELEASE}" --latest="$([[ "$PRERELEASE" == "false" ]] && echo true || echo false)"
           else
-            gh release create "$TAG" "${create_args[@]}"
+            gh release create "$TAG" --title "Proton-CachyOS-PipeWire $TAG" --notes-file "$notes" \
+              --prerelease="${PRERELEASE}" --latest="$([[ "$PRERELEASE" == "false" ]] && echo true || echo false)"
           fi
 
-          # The tag is the claim; confirm the server put it where we asked.
+          # The tag is the claim; confirm it landed on the build commit.
           git fetch -q origin "+refs/tags/${TAG}:refs/tags/${TAG}"
           tagged=$(git rev-parse "refs/tags/${TAG}^{commit}")
           if [[ "$tagged" != "$PROTON_SHA" ]]; then
