@@ -368,14 +368,21 @@ jobs:
             fi
             # No --depth=1: the lockstep gate below needs a real commit graph,
             # and a shallow graft makes `merge-base --is-ancestor` answer "no".
-            # The submodule clone is blobless (--filter=tree:0), so a full-history
-            # fetch only adds commit metadata the pin does not already carry.
+            #
+            # --filter=blob:none on both: the submodule is a --filter=tree:0
+            # partial clone whose promisor is the configured URL. An unfiltered
+            # fetch from any other URL makes git demand blobs it believes it
+            # already has and dies with "missing blob object". The fork
+            # fallback below is exactly that case, and it is the one a release
+            # of a fork-only SHA depends on. The configured-URL fetch survives
+            # unfiltered only because that URL happens to be the promisor, so
+            # it is filtered too rather than resting on the coincidence.
             echo "Fetching immutable wine ${override} from configured submodule URL: ${wine_url}"
-            if git -C "$wine_path" fetch --no-tags "$wine_url" "$override"; then
+            if git -C "$wine_path" fetch --no-tags --filter=blob:none "$wine_url" "$override"; then
               fetched_url="$wine_url"
             else
               echo "::warning::SHA not served by configured submodule URL; trying ${wine_fallback_url}"
-              if ! git -C "$wine_path" fetch --no-tags "$wine_fallback_url" "$override"; then
+              if ! git -C "$wine_path" fetch --no-tags --filter=blob:none "$wine_fallback_url" "$override"; then
                 echo "::error::wine ${override} is unavailable from both ${wine_url} and ${wine_fallback_url}"
                 exit 1
               fi
