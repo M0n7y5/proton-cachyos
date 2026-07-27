@@ -2307,15 +2307,22 @@ jobs:
         run: |
           set -euo pipefail
           # Tag the proton commit the artifacts were built from, not whatever
-          # this dispatch happens to be running.
+          # this dispatch happens to be running. A rebase or a force push can
+          # orphan that commit after the build; the artifacts are still the
+          # tested ones, so publish them and say plainly that the tag is only a
+          # handle. build-info carries the real build commit either way.
+          tag_caveat=""
+          if git cat-file -e "${PROTON_SHA}^{commit}" 2>/dev/null; then
+            tag_target="$PROTON_SHA"
+          else
+            tag_target="$GITHUB_SHA"
+            tag_caveat="This tag points at ${GITHUB_SHA}. The commit these artifacts were built from, ${PROTON_SHA}, is no longer reachable in this repository, so the tag is a handle rather than the build point. build-info.txt below records the real one."
+            echo "::warning::proton_sha ${PROTON_SHA} is unreachable, probably rewritten; tagging ${GITHUB_SHA} and saying so in the notes"
+          fi
           if ! git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
-            if ! git cat-file -e "${PROTON_SHA}^{commit}" 2>/dev/null; then
-              echo "::error::proton_sha ${PROTON_SHA} from build-info is not in this repository"
-              exit 1
-            fi
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" "$PROTON_SHA" -m "$TAG"
+            git tag -a "$TAG" "$tag_target" -m "$TAG"
             git push origin "refs/tags/${TAG}"
           fi
 
@@ -2325,6 +2332,10 @@ jobs:
             echo "These are the artifacts that were tested, byte for byte, not a rebuild."
             echo ""
             echo "Source run: ${RUN_URL}"
+            if [[ -n "$tag_caveat" ]]; then
+              echo ""
+              echo "> ${tag_caveat}"
+            fi
             echo ""
             echo "Extract under \`~/.steam/root/compatibilitytools.d/\` and restart Steam."
             echo ""
