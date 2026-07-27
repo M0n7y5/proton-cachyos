@@ -461,11 +461,13 @@ jobs:
             wine_source="submodule-pin"
           fi
 
-          echo "wine_sha=$wine_sha" >> "$GITHUB_OUTPUT"
-          echo "wine_source=$wine_source" >> "$GITHUB_OUTPUT"
-          echo "wine_ref_name=$wine_ref" >> "$GITHUB_OUTPUT"
-          echo "wine_ref_sha=$ref_sha" >> "$GITHUB_OUTPUT"
-          echo "wine_url_effective=$wine_url_effective" >> "$GITHUB_OUTPUT"
+          {
+            echo "wine_sha=$wine_sha"
+            echo "wine_source=$wine_source"
+            echo "wine_ref_name=$wine_ref"
+            echo "wine_ref_sha=$ref_sha"
+            echo "wine_url_effective=$wine_url_effective"
+          } >> "$GITHUB_OUTPUT"
 
           {
             echo "### Wine pin"
