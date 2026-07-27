@@ -2404,17 +2404,14 @@ jobs:
           PRERELEASE: ${{ inputs.promote_prerelease }}
         run: |
           set -euo pipefail
-          # Tag the commit that produced these artifacts, never a stand-in.
-          # The preserve job pushed refs/ci-builds/<run_id> at that commit when
-          # the build passed its gates, and the verify step above already
-          # fetched it and checked it against build-info, so it is reachable
-          # here no matter what happened to the branch since.
-          if ! git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" "$PROTON_SHA" -m "$TAG"
-            git push origin "refs/tags/${TAG}"
-          fi
+          # The tag is created by the releases API with --target, not by
+          # git push. GITHUB_TOKEN cannot push any ref, tag included, whose
+          # commit carries workflow files differing from the branch tip: the
+          # receive hook rejects it as creating a workflow without the
+          # `workflows` permission, which no GITHUB_TOKEN can hold. Since the
+          # tag must point at the build commit and the branch moves on after a
+          # build, that path is unusable here. Creating the release at an
+          # explicit target makes the tag server side instead.
 
           info="dist/${NAME}.build-info.txt"
           get() { grep "^$1=" "$info" | cut -d= -f2- || true; }
@@ -2485,7 +2482,7 @@ jobs:
             echo '```'
           } > "$notes"
 
-          create_args=(--title "Proton-CachyOS-PipeWire $TAG" --notes-file "$notes")
+          create_args=(--target "$PROTON_SHA" --title "Proton-CachyOS-PipeWire $TAG" --notes-file "$notes")
           if [[ "$PRERELEASE" == "false" ]]; then
             create_args+=(--latest)
           else
@@ -2497,6 +2494,15 @@ jobs:
           else
             gh release create "$TAG" "${create_args[@]}"
           fi
+
+          # The tag is the claim; confirm the server put it where we asked.
+          git fetch -q origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+          tagged=$(git rev-parse "refs/tags/${TAG}^{commit}")
+          if [[ "$tagged" != "$PROTON_SHA" ]]; then
+            echo "::error::tag ${TAG} resolves to ${tagged}, not the build commit ${PROTON_SHA}"
+            exit 1
+          fi
+          echo "tag ${TAG} resolves to the build commit ${PROTON_SHA}"
 
           assets=("dist/${NAME}.tar.xz" "dist/${NAME}.sha512sum" "dist/${NAME}.build-info.txt")
           # Not `[[ ... ]] && assets+=(...)`: under set -e a false test would end
