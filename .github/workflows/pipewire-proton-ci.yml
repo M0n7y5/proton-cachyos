@@ -427,17 +427,31 @@ jobs:
             # the stale 6cab070d the pin already absorbed. This input exists to
             # build the fork's branch, so ask the fork first and fall back to
             # the configured remote for branches only CachyOS has.
-            echo "Fetching wine ref '${wine_ref}' from ${wine_fallback_url}"
-            if git -C "$wine_path" fetch --no-tags "$wine_fallback_url" "$wine_ref"; then
-              wine_url_effective="$wine_fallback_url"
-            else
-              echo "::warning::ref '${wine_ref}' not served by ${wine_fallback_url}; trying ${wine_url_configured}"
-              if ! git -C "$wine_path" fetch --no-tags "$wine_url_configured" "$wine_ref"; then
-                echo "::error::wine ref '${wine_ref}' is unavailable from both ${wine_fallback_url} and ${wine_url_configured}"
-                echo "::error::check the spelling and that the branch is pushed; a tag or a full SHA is accepted here too"
-                exit 1
+            # Pick the remote by asking which one HAS the ref, then fetch from
+            # exactly that one. Falling back on fetch failure conflates two
+            # different things: a ref that is absent here, and a fetch that
+            # broke for another reason. Run 30280305186 hit the second, a
+            # partial-clone "missing blob object" against the fork, and the old
+            # code quietly fetched CachyOS's stale same-named branch instead.
+            wine_url_effective=""
+            for cand in "$wine_fallback_url" "$wine_url_configured"; do
+              if git ls-remote --exit-code "$cand" "$wine_ref" >/dev/null 2>&1 \
+                 || git ls-remote --exit-code "$cand" "refs/heads/${wine_ref}" >/dev/null 2>&1; then
+                wine_url_effective="$cand"
+                break
               fi
-              wine_url_effective="$wine_url_configured"
+              echo "::warning::ref '${wine_ref}' is not on ${cand}"
+            done
+            if [[ -z "$wine_url_effective" ]]; then
+              echo "::error::wine ref '${wine_ref}' is unavailable from both ${wine_fallback_url} and ${wine_url_configured}"
+              echo "::error::check the spelling and that the branch is pushed; a tag or a full SHA is accepted here too"
+              exit 1
+            fi
+            echo "Fetching wine ref '${wine_ref}' from ${wine_url_effective}"
+            if ! git -C "$wine_path" fetch --no-tags "$wine_url_effective" "$wine_ref"; then
+              echo "::error::${wine_url_effective} has ref '${wine_ref}' but the fetch failed"
+              echo "::error::this is a fetch fault, not a missing branch; CI will not silently substitute the other remote's branch of the same name"
+              exit 1
             fi
             ref_sha=$(git -C "$wine_path" rev-parse FETCH_HEAD)
             echo "Fetched wine ref '${wine_ref}' -> ${ref_sha} from ${wine_url_effective}"
