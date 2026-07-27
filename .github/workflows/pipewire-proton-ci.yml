@@ -447,8 +447,15 @@ jobs:
               echo "::error::check the spelling and that the branch is pushed; a tag or a full SHA is accepted here too"
               exit 1
             fi
+            # --filter=blob:none, because the submodule is a --filter=tree:0
+            # partial clone whose promisor is the configured remote. Fetching a
+            # branch from a different URL without a filter makes git demand
+            # blobs it believes it already has, and the fetch dies with
+            # "missing blob object". Reproduced in seconds against a fresh
+            # blobless clone; the filtered fetch resolves the same ref and the
+            # merge that follows produces the identical tree.
             echo "Fetching wine ref '${wine_ref}' from ${wine_url_effective}"
-            if ! git -C "$wine_path" fetch --no-tags "$wine_url_effective" "$wine_ref"; then
+            if ! git -C "$wine_path" fetch --no-tags --filter=blob:none "$wine_url_effective" "$wine_ref"; then
               echo "::error::${wine_url_effective} has ref '${wine_ref}' but the fetch failed"
               echo "::error::this is a fetch fault, not a missing branch; CI will not silently substitute the other remote's branch of the same name"
               exit 1
