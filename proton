@@ -2075,6 +2075,20 @@ class Session:
         if audio_driver and "WINE_AUDIO_DRIVER" not in self.env:
             self.env["WINE_AUDIO_DRIVER"] = audio_driver
 
+        # Applets take a stream icon from media.icon_name, then
+        # application.icon_name, skipping names missing from the icon theme.
+        # Steam installs steam_icon_<appid> there for installed games.
+        icon_props = []
+        appid = os.environ.get("SteamAppId", "")
+        if appid.isdigit() and int(appid) != 0:
+            icon_props.append(("media.icon_name", f"steam_icon_{appid}"))
+        icon_props.append(("application.icon_name", "applications-games"))
+        if "PIPEWIRE_PROPS" not in self.env:
+            icon_json = " ".join(f'{key} = "{value}"' for key, value in icon_props)
+            self.env["PIPEWIRE_PROPS"] = f"{{ {icon_json} }}"
+        for key, value in icon_props:
+            self.env.setdefault(f"PULSE_PROP_{key}", value)
+
         if "heaptopdown" in self.compat_config:
             self.env["WINE_HEAP_TOP_DOWN"] = "1"
 
