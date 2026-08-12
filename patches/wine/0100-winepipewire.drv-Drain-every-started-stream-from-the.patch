@@ -1,4 +1,4 @@
-From ddc4b7ae39b6885ec2a4cc98396fbf878c20819f Mon Sep 17 00:00:00 2001
+From 57326e130531bdc17293e775eadc42110b52c6e5 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:20 +0200
 Subject: [PATCH 100/162] winepipewire.drv: Drain every started stream from the

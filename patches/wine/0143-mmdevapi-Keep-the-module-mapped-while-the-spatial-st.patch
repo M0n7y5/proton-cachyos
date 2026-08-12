@@ -1,4 +1,4 @@
-From d3fc903eb3e834aeeb512bc9fa9ea86720c6199a Mon Sep 17 00:00:00 2001
+From a0237f864f418762c23034ab2dbdd8250e97fea8 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 19:31:59 +0200
 Subject: [PATCH 143/162] mmdevapi: Keep the module mapped while the spatial

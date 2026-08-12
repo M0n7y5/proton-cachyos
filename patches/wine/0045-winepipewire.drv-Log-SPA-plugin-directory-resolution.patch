@@ -1,4 +1,4 @@
-From 842972dcef9408f4aa528bc612dc8e09721c914a Mon Sep 17 00:00:00 2001
+From 314235832313466595901a4f89eaf487af9064f3 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 23 Jun 2026 14:45:21 +0200
 Subject: [PATCH 045/162] winepipewire.drv: Log SPA plugin directory resolution

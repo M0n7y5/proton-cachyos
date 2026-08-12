@@ -1,4 +1,4 @@
-From ad41d032d39b365c7856ef7455d83854bfcac158 Mon Sep 17 00:00:00 2001
+From 06068c92f31e6df90959e355677df50903337cbc Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Thu, 6 Aug 2026 20:30:09 +0200
 Subject: [PATCH 097/162] winepipewire.drv: Give streams a generic media name.

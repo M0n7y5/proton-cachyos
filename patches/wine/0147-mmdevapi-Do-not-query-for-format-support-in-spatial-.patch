@@ -1,4 +1,4 @@
-From 9da34044f9b7d04807479c55ea753589ee8caa7d Mon Sep 17 00:00:00 2001
+From 07ab0343751cc60d4f5fdeaae006ece54930ef01 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 21:56:11 +0200
 Subject: [PATCH 147/162] mmdevapi: Do not query for format support in spatial

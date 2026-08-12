@@ -1,4 +1,4 @@
-From 4225db675154857e59530eb3b6b9d2ae054c3183 Mon Sep 17 00:00:00 2001
+From da40f687cf2195f738ce716735d9399e4b7c899e Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 18:30:36 +0200
 Subject: [PATCH 138/162] mmdevapi: Validate the spatial engine geometry and

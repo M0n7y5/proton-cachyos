@@ -1,4 +1,4 @@
-From c62cc18ab6571e159f2edbdb556902260dbe4cfd Mon Sep 17 00:00:00 2001
+From 9f79ca9a8167ff30e72be56b8c563c6b5e2d0cf3 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:27 +0200
 Subject: [PATCH 104/162] winepipewire.drv: Reject nodes with an empty name.

@@ -1,4 +1,4 @@
-From 40354db06775814dc6ea76ff95d950efb1dbebcf Mon Sep 17 00:00:00 2001
+From 9118dd79bcab052135de90ca7bdb7415055fd3e0 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 2 Aug 2026 15:07:25 +0200
 Subject: [PATCH 092/162] winepipewire.drv: Defer the endpoint name length

@@ -1,4 +1,4 @@
-From 1df31e0f99897b48034da135b8fb67262a8f8351 Mon Sep 17 00:00:00 2001
+From ca634b3ff8934dcde4133066c326eb4709b2331e Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 25 Jul 2026 23:59:26 +0200
 Subject: [PATCH 070/162] winepipewire.drv: Clamp the render copy to the ring

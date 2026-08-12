@@ -1,4 +1,4 @@
-From 57fcce1c85f8238a81ff91c03b434e897cd8c8d0 Mon Sep 17 00:00:00 2001
+From e7ac0046d5a230eead54c1e0d8de624a968940b3 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:39 +0200
 Subject: [PATCH 112/162] winepipewire.drv: Factor out the tail array sizing.

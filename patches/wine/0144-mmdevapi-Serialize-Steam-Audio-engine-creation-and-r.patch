@@ -1,4 +1,4 @@
-From 3fdbe4a8d04bbec9e241769f28f2e7b4e1c343dd Mon Sep 17 00:00:00 2001
+From a87fa0212d74c15b16d4a415dc34327e81630e6a Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 19:32:00 +0200
 Subject: [PATCH 144/162] mmdevapi: Serialize Steam Audio engine creation and

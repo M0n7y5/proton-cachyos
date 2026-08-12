@@ -1,4 +1,4 @@
-From 2fd0c7ba97715468390c4f93a2196ea838243fc4 Mon Sep 17 00:00:00 2001
+From 5e7e597251002d82605c9651e7a7115ddecc5595 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 12 Aug 2026 20:15:49 +0200
 Subject: [PATCH 160/162] winepipewire.drv: Record why the duplicate node name

@@ -1,4 +1,4 @@
-From 0f5ab6b682cdc29eb455499dfa9bfbc5bb53a749 Mon Sep 17 00:00:00 2001
+From cd350d373b6d6a9f884e1b1d73b28073a75f4e64 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 2 Aug 2026 14:48:02 +0200
 Subject: [PATCH 089/162] winepipewire.drv: Cap endpoint names at 62 chars for

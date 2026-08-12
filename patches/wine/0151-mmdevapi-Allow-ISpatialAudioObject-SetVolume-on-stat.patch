@@ -1,4 +1,4 @@
-From 8f50becce51f3c7facf4890979c9b66d34aa4d05 Mon Sep 17 00:00:00 2001
+From f2a68b4540e41b568ef563269c701c41dc3c7b31 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 12 Aug 2026 19:28:18 +0200
 Subject: [PATCH 151/162] mmdevapi: Allow ISpatialAudioObject::SetVolume on

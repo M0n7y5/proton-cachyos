@@ -1,4 +1,4 @@
-From b4d460c644bb6734cc5af2feecf32359267766d0 Mon Sep 17 00:00:00 2001
+From 067ebe2f9fbb5129ebe35ffbf7abfcc1fb1c3072 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 12 Aug 2026 19:27:04 +0200
 Subject: [PATCH 150/162] mmdevapi: Check the update cycle state in

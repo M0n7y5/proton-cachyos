@@ -1,4 +1,4 @@
-From 7d6ea64c38a84a99f98808e367350becbe3a7818 Mon Sep 17 00:00:00 2001
+From bf191e6132fdd555c1fe033143e798aabd9dc953 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Fri, 12 Jun 2026 18:37:56 +0200
 Subject: [PATCH 036/162] server: Don't send debug events for system threads.

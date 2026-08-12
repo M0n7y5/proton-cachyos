@@ -1,4 +1,4 @@
-From db95b26d6e7836857daec1f58f10910dfdba7013 Mon Sep 17 00:00:00 2001
+From 620e7edb74c57da4824abb4a08088d449b8ff03a Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 14 Jun 2026 18:35:34 +0200
 Subject: [PATCH 040/162] winepipewire.drv: Resync the device cursor on render

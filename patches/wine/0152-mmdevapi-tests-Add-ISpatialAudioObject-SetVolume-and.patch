@@ -1,4 +1,4 @@
-From da1d49b194a6827c5675127addf998fb53d2eacd Mon Sep 17 00:00:00 2001
+From 37f588c38535003507761582a28ff20909c377e3 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 12 Aug 2026 19:31:49 +0200
 Subject: [PATCH 152/162] mmdevapi/tests: Add ISpatialAudioObject::SetVolume

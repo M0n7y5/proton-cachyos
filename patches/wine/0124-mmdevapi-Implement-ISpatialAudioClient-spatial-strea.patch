@@ -1,4 +1,4 @@
-From fda08875dcf14455a1f56f849012f8ead0d0ecb8 Mon Sep 17 00:00:00 2001
+From 65cd88dfa1f058ff324e4002a002d4cf0995b4c9 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 13 Jun 2026 10:51:49 +0200
 Subject: [PATCH 124/162] mmdevapi: Implement ISpatialAudioClient spatial

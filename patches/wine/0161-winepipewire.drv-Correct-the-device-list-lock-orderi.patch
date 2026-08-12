@@ -1,4 +1,4 @@
-From 8395442f4fa5522e416a52b74b79b5ecd0a2ad4a Mon Sep 17 00:00:00 2001
+From d815fbd4545346eb3f64fbda5f1c4be69bad1581 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 12 Aug 2026 20:22:39 +0200
 Subject: [PATCH 161/162] winepipewire.drv: Correct the device list lock

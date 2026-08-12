@@ -1,4 +1,4 @@
-From 37c11c6d47317e0ffb6720b858781e3dbd708616 Mon Sep 17 00:00:00 2001
+From 74e3aabc1bec9da678266cb48d2780ce043f92d2 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 13 Jun 2026 00:54:49 +0200
 Subject: [PATCH 121/162] mmdevapi: Allow enabling spatial sound with the

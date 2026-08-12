@@ -1,4 +1,4 @@
-From bba778942a4feb044fa475eea112c3fd561611b8 Mon Sep 17 00:00:00 2001
+From 67faa78c6889001118ccdf1ead88466e94254279 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 2 Aug 2026 22:05:11 +0200
 Subject: [PATCH 094/162] winepipewire.drv: Read device properties from the

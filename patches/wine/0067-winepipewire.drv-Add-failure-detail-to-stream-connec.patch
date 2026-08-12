@@ -1,4 +1,4 @@
-From fc3e176d2ac5cd8f267b43812b1a4379668c13e1 Mon Sep 17 00:00:00 2001
+From 606df8d3cdb3a4d90778c58dfefdebd4a050ba8d Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 19 Jul 2026 21:29:00 +0200
 Subject: [PATCH 067/162] winepipewire.drv: Add failure detail to stream

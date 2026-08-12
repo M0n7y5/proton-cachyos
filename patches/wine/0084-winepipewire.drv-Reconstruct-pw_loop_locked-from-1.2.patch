@@ -1,4 +1,4 @@
-From 29a228a8f8b2deb146a82b6054d06a5bc92f79c5 Mon Sep 17 00:00:00 2001
+From a17acbbd215961890f04a6fa95a19be124d1f6be Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 19:08:01 +0200
 Subject: [PATCH 084/162] winepipewire.drv: Reconstruct pw_loop_locked from

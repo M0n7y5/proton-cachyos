@@ -1,4 +1,4 @@
-From b8fe10e51a367efe4b48b23119d17e48d5a8adac Mon Sep 17 00:00:00 2001
+From c28cc11f4c1e23003827402d5aee57cf2b588beb Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 2 Aug 2026 14:46:00 +0200
 Subject: [PATCH 088/162] winepipewire.drv: Journal stream state transitions

@@ -1,4 +1,4 @@
-From 93928e0781fe738fdac404380ecc165fc1687c02 Mon Sep 17 00:00:00 2001
+From b22f734e719276b2f328c90767d9742624ffdb42 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:24 +0200
 Subject: [PATCH 102/162] winepipewire.drv: Validate daemon-supplied properties

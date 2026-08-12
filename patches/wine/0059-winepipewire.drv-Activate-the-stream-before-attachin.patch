@@ -1,4 +1,4 @@
-From 04f15149b8397760d3f9aca8f60e6dac6a48097a Mon Sep 17 00:00:00 2001
+From adb7bc4bb2dde83878401f0ab16e540acdba3e61 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 19 Jul 2026 21:07:25 +0200
 Subject: [PATCH 059/162] winepipewire.drv: Activate the stream before

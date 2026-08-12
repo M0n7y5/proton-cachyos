@@ -1,4 +1,4 @@
-From bf40746475b705d25e8a5884ce183c3e8582f3e9 Mon Sep 17 00:00:00 2001
+From b3d2a22b788add355149384831dc25f902271da0 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 2 Aug 2026 14:56:06 +0200
 Subject: [PATCH 091/162] winepipewire.drv: Report the device path and

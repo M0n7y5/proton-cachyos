@@ -1,4 +1,4 @@
-From f80f6a60227076366f2970e340f7d7991b599073 Mon Sep 17 00:00:00 2001
+From ae05f37a1691cc04cedfd07994b7c3e907467b09 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:37 +0200
 Subject: [PATCH 111/162] winepipewire.drv: Remove dead stream and journal

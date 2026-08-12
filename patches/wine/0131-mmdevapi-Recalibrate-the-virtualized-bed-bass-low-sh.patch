@@ -1,4 +1,4 @@
-From 37e7b8e82eb5454d889e2d7821c9be21fb83fb8e Mon Sep 17 00:00:00 2001
+From 93986c41535079f5cad7a0c287c49c1a45e0e1bd Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 16 Jun 2026 16:58:45 +0200
 Subject: [PATCH 131/162] mmdevapi: Recalibrate the virtualized-bed bass

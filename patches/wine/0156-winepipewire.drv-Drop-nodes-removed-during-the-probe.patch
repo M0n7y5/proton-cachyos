@@ -1,4 +1,4 @@
-From c277ba7140db04ebaa7826e87a6cdae65eb31440 Mon Sep 17 00:00:00 2001
+From 09053170ad82f4fe3fdc3eab7c98b7ab06493507 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 12 Aug 2026 19:39:53 +0200
 Subject: [PATCH 156/162] winepipewire.drv: Drop nodes removed during the

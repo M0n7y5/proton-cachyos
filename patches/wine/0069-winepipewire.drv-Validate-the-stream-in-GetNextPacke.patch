@@ -1,4 +1,4 @@
-From 2fe1eda05c5ebfb7e69fdb2e19e5d7c4562d1d8d Mon Sep 17 00:00:00 2001
+From 53174cad036f70ba3d74f31c8b5f57f3bac70d03 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 25 Jul 2026 23:58:58 +0200
 Subject: [PATCH 069/162] winepipewire.drv: Validate the stream in

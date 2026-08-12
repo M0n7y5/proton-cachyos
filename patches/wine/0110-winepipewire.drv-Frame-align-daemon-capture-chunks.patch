@@ -1,4 +1,4 @@
-From 3baa908874f685bbe131fd4cef62bb2fd9ab698c Mon Sep 17 00:00:00 2001
+From 59c5bf0cabc2dfd2c868ccb78d7b3cbab536ac87 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:36 +0200
 Subject: [PATCH 110/162] winepipewire.drv: Frame-align daemon capture chunks.

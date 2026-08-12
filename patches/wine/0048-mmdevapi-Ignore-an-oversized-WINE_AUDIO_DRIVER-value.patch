@@ -1,4 +1,4 @@
-From 08a929ccfc943cf8ba25542a5ee41b3074241882 Mon Sep 17 00:00:00 2001
+From 72d13bbd4ee64de99a04d2ce94f733f3de211d78 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Mon, 6 Jul 2026 20:29:46 +0200
 Subject: [PATCH 048/162] mmdevapi: Ignore an oversized WINE_AUDIO_DRIVER

@@ -1,4 +1,4 @@
-From 41e590f6fc6e82eb7fb3db5a8e440f55d9d83da7 Mon Sep 17 00:00:00 2001
+From 2bbc67f58d6549ded47e8ce3bc6dca42742a4b35 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 2 Aug 2026 22:05:04 +0200
 Subject: [PATCH 093/162] winepipewire.drv: Marshal the VT_CLSID property value

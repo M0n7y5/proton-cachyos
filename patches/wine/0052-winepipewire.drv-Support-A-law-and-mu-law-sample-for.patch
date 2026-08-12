@@ -1,4 +1,4 @@
-From 77d91c2006d9a668c7fc43489b3e2273dac588ce Mon Sep 17 00:00:00 2001
+From 43c415db60929a9b179f1180511bef168b59e8f0 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Mon, 6 Jul 2026 20:38:28 +0200
 Subject: [PATCH 052/162] winepipewire.drv: Support A-law and mu-law sample

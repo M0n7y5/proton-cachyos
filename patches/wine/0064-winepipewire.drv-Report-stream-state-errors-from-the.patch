@@ -1,4 +1,4 @@
-From be9c28e8464e4a6a74b3fc4c756f7c369f73582b Mon Sep 17 00:00:00 2001
+From fca238f0c69f6e0d0300b715e305f49b6c142152 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 19 Jul 2026 21:27:02 +0200
 Subject: [PATCH 064/162] winepipewire.drv: Report stream state errors from the

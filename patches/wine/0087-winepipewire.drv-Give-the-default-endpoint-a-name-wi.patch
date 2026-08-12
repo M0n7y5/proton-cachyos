@@ -1,4 +1,4 @@
-From 836d1efe309b5236e10f2ae3ca3d2e29c7792e10 Mon Sep 17 00:00:00 2001
+From 5e071ee8e6d5861a567e5fa572137452499edf23 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 2 Aug 2026 14:42:36 +0200
 Subject: [PATCH 087/162] winepipewire.drv: Give the default endpoint a name

@@ -1,4 +1,4 @@
-From fa4929c3f11aaf60f226183b48fdd44742eb5c56 Mon Sep 17 00:00:00 2001
+From b6b24ef935de99d139e863bb071550b6f5ea23d6 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 19:31:57 +0200
 Subject: [PATCH 141/162] mmdevapi: Lock the spatial audio object activation

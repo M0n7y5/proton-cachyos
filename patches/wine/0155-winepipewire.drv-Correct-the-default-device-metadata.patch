@@ -1,4 +1,4 @@
-From 41747036c6c51b8ffe635be9edb666a069d6b490 Mon Sep 17 00:00:00 2001
+From 0fdcdb51492f70684af92ad26a44e95bb8e1b325 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 12 Aug 2026 19:39:05 +0200
 Subject: [PATCH 155/162] winepipewire.drv: Correct the default device metadata

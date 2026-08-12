@@ -1,4 +1,4 @@
-From 21306dea1aee989e3080adac15701c291c306b77 Mon Sep 17 00:00:00 2001
+From bc6ad95f415ce875d6710f0e24caa0a5242127dd Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 00:01:44 +0200
 Subject: [PATCH 071/162] winepipewire.drv: Snapshot stream volumes in the

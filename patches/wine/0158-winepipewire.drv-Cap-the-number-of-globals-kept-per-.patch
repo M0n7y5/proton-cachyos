@@ -1,4 +1,4 @@
-From fb7499920495cd0ccd1aeca16c67d06d90a7d7da Mon Sep 17 00:00:00 2001
+From a2b9448c24db76e10556309d07b5154ffce23047 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 12 Aug 2026 19:42:12 +0200
 Subject: [PATCH 158/162] winepipewire.drv: Cap the number of globals kept per

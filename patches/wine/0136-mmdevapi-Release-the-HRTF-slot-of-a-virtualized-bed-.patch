@@ -1,4 +1,4 @@
-From 7bf6094b0f1f1e1186af6441aed0679ec8b56a07 Mon Sep 17 00:00:00 2001
+From c746c0b8cd4d090f86599f0043f0e8f4e141d0ba Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 18:30:34 +0200
 Subject: [PATCH 136/162] mmdevapi: Release the HRTF slot of a virtualized bed

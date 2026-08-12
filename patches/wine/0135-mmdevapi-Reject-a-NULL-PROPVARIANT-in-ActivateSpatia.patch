@@ -1,4 +1,4 @@
-From 5a407b859660c04deda6ba29ee5da1ac0fc74b9e Mon Sep 17 00:00:00 2001
+From 60e7b68e9ef2ed73a18b15f7c39dd8c3115ec1d2 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 18:30:33 +0200
 Subject: [PATCH 135/162] mmdevapi: Reject a NULL PROPVARIANT in

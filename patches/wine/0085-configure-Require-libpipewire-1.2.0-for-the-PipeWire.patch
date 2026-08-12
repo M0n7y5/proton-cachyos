@@ -1,4 +1,4 @@
-From 2fe375e4704fd0e0792a567b67d3422558b25249 Mon Sep 17 00:00:00 2001
+From d29ef17b219495289a4b0cdde604b55fd90a3c23 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 19:08:01 +0200
 Subject: [PATCH 085/162] configure: Require libpipewire 1.2.0 for the PipeWire

@@ -1,4 +1,4 @@
-From 8fa429d6dd84c7c224a2738556f4f44ed9956f78 Mon Sep 17 00:00:00 2001
+From 765fb7b50d6e301a91b0276f52f7e371dac10f37 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:43 +0200
 Subject: [PATCH 115/162] winepipewire.drv: Trim comments and fix mechanical

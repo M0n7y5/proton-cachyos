@@ -1,4 +1,4 @@
-From 0ad30596558b8e1518a724cce53c60679100be0b Mon Sep 17 00:00:00 2001
+From dd72af591321cdebbe5dfb0bce052798c3738408 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 13 Jun 2026 00:25:12 +0200
 Subject: [PATCH 117/162] mmdevapi: Implement ISpatialAudioObject end-of-stream

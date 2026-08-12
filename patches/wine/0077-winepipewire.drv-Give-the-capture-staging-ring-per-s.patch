@@ -1,4 +1,4 @@
-From b94750c61ccea80d89138c301ab4a39bf4f20288 Mon Sep 17 00:00:00 2001
+From c4224390ebe4e83351acd73028fad1f6669f3bc1 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 26 Jul 2026 00:52:03 +0200
 Subject: [PATCH 077/162] winepipewire.drv: Give the capture staging ring

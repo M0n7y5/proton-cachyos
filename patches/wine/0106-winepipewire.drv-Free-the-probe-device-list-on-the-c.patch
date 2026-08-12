@@ -1,4 +1,4 @@
-From b7a60fb779c2df0ba0d47f4d741ef26b045a8c60 Mon Sep 17 00:00:00 2001
+From 4004669f3a4345755e0ead6c36f18dcb41a04fb3 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:30 +0200
 Subject: [PATCH 106/162] winepipewire.drv: Free the probe device list on the

@@ -1,4 +1,4 @@
-From a929aefcf4c90bc47c61719bd065e15d841aec72 Mon Sep 17 00:00:00 2001
+From 96e7c3e33bca110b4d904213417ff6f43677f2f1 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Fri, 12 Jun 2026 18:37:56 +0200
 Subject: [PATCH 033/162] server: Add support for system threads.
@@ -7,14 +7,11 @@ Adapted for 11.0: kept int flags (no stdbool), set req->is_system directly in th
 
 (partially picked from commit 5155018f6f8579b4e0d89eedf45da52cc2478e95)
 ---
- dlls/ntdll/unix/thread.c       | 1 +
- include/wine/server_protocol.h | 4 ++--
- server/protocol.def            | 1 +
- server/request_handlers.h      | 1 +
- server/request_trace.h         | 1 +
- server/thread.c                | 2 ++
- server/thread.h                | 1 +
- 7 files changed, 9 insertions(+), 2 deletions(-)
+ dlls/ntdll/unix/thread.c | 1 +
+ server/protocol.def      | 1 +
+ server/thread.c          | 2 ++
+ server/thread.h          | 1 +
+ 4 files changed, 5 insertions(+)
 
 diff --git a/dlls/ntdll/unix/thread.c b/dlls/ntdll/unix/thread.c
 index ee9fa38ccc4..7fc4524adde 100644
@@ -28,28 +25,6 @@ index ee9fa38ccc4..7fc4524adde 100644
          wine_server_add_data( req, objattr, len );
          if (!(status = wine_server_call( req )))
          {
-diff --git a/include/wine/server_protocol.h b/include/wine/server_protocol.h
-index d2fd9bd38f5..fe0cdd59bec 100644
---- a/include/wine/server_protocol.h
-+++ b/include/wine/server_protocol.h
-@@ -1126,8 +1126,8 @@ struct new_thread_request
-     unsigned int access;
-     unsigned int flags;
-     int          request_fd;
-+    int          is_system;
-     /* VARARG(objattr,object_attributes); */
--    char __pad_28[4];
- };
- struct new_thread_reply
- {
-@@ -7238,6 +7238,6 @@ union generic_reply
-     struct fsync_free_shm_idx_reply fsync_free_shm_idx_reply;
- };
- 
--#define SERVER_PROTOCOL_VERSION 931
-+#define SERVER_PROTOCOL_VERSION 932
- 
- #endif /* __WINE_WINE_SERVER_PROTOCOL_H */
 diff --git a/server/protocol.def b/server/protocol.def
 index 50e2ef2782b..386037da7d0 100644
 --- a/server/protocol.def
@@ -62,30 +37,6 @@ index 50e2ef2782b..386037da7d0 100644
      VARARG(objattr,object_attributes); /* object attributes */
  @REPLY
      thread_id_t  tid;          /* thread id */
-diff --git a/server/request_handlers.h b/server/request_handlers.h
-index d24f9721252..bf907f1b0aa 100644
---- a/server/request_handlers.h
-+++ b/server/request_handlers.h
-@@ -714,6 +714,7 @@ C_ASSERT( offsetof(struct new_thread_request, process) == 12 );
- C_ASSERT( offsetof(struct new_thread_request, access) == 16 );
- C_ASSERT( offsetof(struct new_thread_request, flags) == 20 );
- C_ASSERT( offsetof(struct new_thread_request, request_fd) == 24 );
-+C_ASSERT( offsetof(struct new_thread_request, is_system) == 28 );
- C_ASSERT( sizeof(struct new_thread_request) == 32 );
- C_ASSERT( offsetof(struct new_thread_reply, tid) == 8 );
- C_ASSERT( offsetof(struct new_thread_reply, handle) == 12 );
-diff --git a/server/request_trace.h b/server/request_trace.h
-index 61dcc694ae2..eaca1c1ae6a 100644
---- a/server/request_trace.h
-+++ b/server/request_trace.h
-@@ -102,6 +102,7 @@ static void dump_new_thread_request( const struct new_thread_request *req )
-     fprintf( stderr, ", access=%08x", req->access );
-     fprintf( stderr, ", flags=%08x", req->flags );
-     fprintf( stderr, ", request_fd=%d", req->request_fd );
-+    fprintf( stderr, ", is_system=%d", req->is_system );
-     dump_varargs_object_attributes( ", objattr=", cur_size );
- }
- 
 diff --git a/server/thread.c b/server/thread.c
 index 567fdbf5200..cadc8d845dd 100644
 --- a/server/thread.c

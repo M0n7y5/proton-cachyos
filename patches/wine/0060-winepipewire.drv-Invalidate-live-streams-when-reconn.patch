@@ -1,4 +1,4 @@
-From 63d288f97890017eaead69c4f90055032c7330cd Mon Sep 17 00:00:00 2001
+From 31e6d5db38c67712ae69d7d11dd974e7edb35f3b Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 19 Jul 2026 21:45:34 +0200
 Subject: [PATCH 060/162] winepipewire.drv: Invalidate live streams when

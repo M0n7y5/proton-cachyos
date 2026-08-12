@@ -1,4 +1,4 @@
-From ecdf16320820373684ec42d9b8818f6ca559a0bc Mon Sep 17 00:00:00 2001
+From ca6cecde4945617c6c39ecf77d5084af71e42903 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 21:59:32 +0200
 Subject: [PATCH 148/162] mmdevapi: Don't fail initialization when no drivers

@@ -1,4 +1,4 @@
-From 630bb35f74a125aa757f381313c43dcb160cfdfa Mon Sep 17 00:00:00 2001
+From c4db3222624eb14919071156f97af7095e8d75e3 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:33 +0200
 Subject: [PATCH 108/162] winepipewire.drv: Overwrite an inherited

@@ -1,4 +1,4 @@
-From 26766b870c7a53fb54845d6afe94775490bfba16 Mon Sep 17 00:00:00 2001
+From b2bcbdfe07c991f3e0c5efec3bac9eaf56f307a7 Mon Sep 17 00:00:00 2001
 From: Paul Gofman <pgofman@codeweavers.com>
 Date: Fri, 19 Jun 2026 17:35:57 -0600
 Subject: [PATCH 162/162] mmdevapi: Implement SAORS_Reset().

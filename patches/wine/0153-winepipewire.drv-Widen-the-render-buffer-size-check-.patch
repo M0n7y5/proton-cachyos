@@ -1,4 +1,4 @@
-From 7336d05bcf965481405ae5abba17cb47663db12f Mon Sep 17 00:00:00 2001
+From 0d860a44f936c7becf9e01ed1061e6e148e0a443 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 12 Aug 2026 19:36:06 +0200
 Subject: [PATCH 153/162] winepipewire.drv: Widen the render buffer size check

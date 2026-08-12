@@ -1,4 +1,4 @@
-From 93b9ea8a2a83161e327057b21633a848d29ab94c Mon Sep 17 00:00:00 2001
+From 047ee2958f7279d9b9836682c430d24b3ebc46ec Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 18:30:35 +0200
 Subject: [PATCH 137/162] mmdevapi: Initialize the spatial sound option buffer

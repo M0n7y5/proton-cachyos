@@ -1,4 +1,4 @@
-From f8b5469c1a64446590bcbea9b2a8424671beeab9 Mon Sep 17 00:00:00 2001
+From a4b0b35ae4e49bae6ef1bc6aaa780d8ef971bfbe Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 13 Jun 2026 00:26:21 +0200
 Subject: [PATCH 118/162] mmdevapi: Add a registry switch enabling spatial

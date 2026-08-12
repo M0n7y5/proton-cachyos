@@ -1,4 +1,4 @@
-From 13da8c70bc3bcd4347e31a9cd99a26807d23dff7 Mon Sep 17 00:00:00 2001
+From a06d36ed462870981f81b775b344fec80cd9a5e0 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 19 Jul 2026 21:07:57 +0200
 Subject: [PATCH 061/162] winepipewire.drv: Reject period sizes that overflow

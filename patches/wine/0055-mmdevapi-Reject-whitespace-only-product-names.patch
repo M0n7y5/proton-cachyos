@@ -1,4 +1,4 @@
-From 60b062e2537451c6eb501318cc49f6cfda1a17e7 Mon Sep 17 00:00:00 2001
+From 6b159dd61f42557b420eb63ccab3c09ab958aa92 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 11 Jul 2026 00:29:16 +0200
 Subject: [PATCH 055/162] mmdevapi: Reject whitespace-only product names.

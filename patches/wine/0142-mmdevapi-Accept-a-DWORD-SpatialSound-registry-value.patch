@@ -1,4 +1,4 @@
-From 2580de4bb4542c77eb631a279ce3ca5e40ef5eb8 Mon Sep 17 00:00:00 2001
+From 07130e097d8732ce8b89c21f358c7af36b148dec Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 19:31:58 +0200
 Subject: [PATCH 142/162] mmdevapi: Accept a DWORD SpatialSound registry value.

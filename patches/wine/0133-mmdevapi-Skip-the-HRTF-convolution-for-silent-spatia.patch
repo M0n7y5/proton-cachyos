@@ -1,4 +1,4 @@
-From 5f9442412fc40b05fbd2deb7009356d37cdae2fb Mon Sep 17 00:00:00 2001
+From e112fb0d51fe885a5994041039d02af20cd4e260 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 17:35:39 +0200
 Subject: [PATCH 133/162] mmdevapi: Skip the HRTF convolution for silent

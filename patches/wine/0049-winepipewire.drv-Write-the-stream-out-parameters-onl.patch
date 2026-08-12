@@ -1,4 +1,4 @@
-From 548905820648a616d69ecb0de3be20d6e1d106b8 Mon Sep 17 00:00:00 2001
+From 2325cdc76253958e65786e23df668c45bdbf0fb8 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Mon, 6 Jul 2026 20:29:58 +0200
 Subject: [PATCH 049/162] winepipewire.drv: Write the stream out parameters

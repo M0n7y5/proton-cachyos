@@ -1,4 +1,4 @@
-From 3791b96c29c85a529459d93cee9da13ee81b0e37 Mon Sep 17 00:00:00 2001
+From 6c3bc22809b336a650caddbfcc2fbcf35adfc652 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 14 Jun 2026 13:59:10 +0200
 Subject: [PATCH 039/162] mmdevapi: Read the audio driver list from

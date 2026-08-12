@@ -1,4 +1,4 @@
-From be41798892dcc59def338c8bbbc0fa216541bb13 Mon Sep 17 00:00:00 2001
+From a324bb7a8470c65fbdf49f867fa47318f6da899c Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 8 Jul 2026 21:28:02 +0200
 Subject: [PATCH 053/162] winepipewire.drv: Report application names to

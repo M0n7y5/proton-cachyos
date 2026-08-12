@@ -1,4 +1,4 @@
-From 054aaa175f1bf9e4bb60f18da247c49691b811a2 Mon Sep 17 00:00:00 2001
+From c42c026e1740d4fe2f6b21f6a781a27eb9bc6d3f Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 21:55:22 +0200
 Subject: [PATCH 146/162] mmdevapi: Reject wave formats with zero block

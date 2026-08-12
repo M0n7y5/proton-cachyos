@@ -1,4 +1,4 @@
-From 2dfad3bae2f7c043c6223ce53862c620e616bcba Mon Sep 17 00:00:00 2001
+From 3fc9cbd89e579d6123b27f377e39950344ce4735 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 19 Jul 2026 21:08:09 +0200
 Subject: [PATCH 062/162] winepipewire.drv: Update the ring bookkeeping

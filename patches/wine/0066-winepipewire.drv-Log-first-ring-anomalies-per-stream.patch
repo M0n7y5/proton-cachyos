@@ -1,4 +1,4 @@
-From 3a8f2d8db02b50c6b172be7e8a644ac0e53e6b3f Mon Sep 17 00:00:00 2001
+From 006887c0195dda106123849e3dabdfb4dfb90c59 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 19 Jul 2026 21:27:45 +0200
 Subject: [PATCH 066/162] winepipewire.drv: Log first ring anomalies per

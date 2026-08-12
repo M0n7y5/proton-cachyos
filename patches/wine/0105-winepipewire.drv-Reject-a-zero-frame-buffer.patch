@@ -1,4 +1,4 @@
-From 3e7d8504db0c2dc0b0d84faa544cc3c2a9bbdaac Mon Sep 17 00:00:00 2001
+From efe3e48bbad2bd0fd0eca4b118255c76c28aabc9 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:28 +0200
 Subject: [PATCH 105/162] winepipewire.drv: Reject a zero-frame buffer.

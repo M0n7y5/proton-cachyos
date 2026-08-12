@@ -1,4 +1,4 @@
-From 0ee08bd4a1c3408a71e4a4c8e6a1a883ff23f50b Mon Sep 17 00:00:00 2001
+From c6faea4a916b4d1aa1180124c98d47ae98c5857f Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 18:30:32 +0200
 Subject: [PATCH 134/162] mmdevapi: Reject audio object types that have no bed

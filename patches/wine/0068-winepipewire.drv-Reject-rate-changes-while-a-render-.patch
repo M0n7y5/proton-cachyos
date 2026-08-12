@@ -1,4 +1,4 @@
-From 09fb2aefaed22caeb3d50289a413a7cc07a28c63 Mon Sep 17 00:00:00 2001
+From 28bc6e21eb292381c2d9836a38be85f5d782572c Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 25 Jul 2026 23:58:29 +0200
 Subject: [PATCH 068/162] winepipewire.drv: Reject rate changes while a render

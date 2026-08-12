@@ -1,4 +1,4 @@
-From 0cb07adab00ff256e41690e79e29c57a1ad10ecc Mon Sep 17 00:00:00 2001
+From b41de3a2dbfc77bef01b7f944511949952f16ad8 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sun, 19 Jul 2026 21:45:56 +0200
 Subject: [PATCH 065/162] winepipewire.drv: Record core errors for diagnostics.

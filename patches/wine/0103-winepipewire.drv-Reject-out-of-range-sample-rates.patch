@@ -1,4 +1,4 @@
-From f2b424172861e560a8c5fca21a249a3fd1fdca93 Mon Sep 17 00:00:00 2001
+From d40e1770cf461085f85fd9eae758be45f882ec88 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Tue, 11 Aug 2026 14:13:25 +0200
 Subject: [PATCH 103/162] winepipewire.drv: Reject out-of-range sample rates.

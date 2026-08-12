@@ -1,4 +1,4 @@
-From 667edf83352bbf03a72b87008a5ae22816964a50 Mon Sep 17 00:00:00 2001
+From 1ca1ee201efaac5af85dc1491cd1a39eb25b37ee Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Wed, 15 Jul 2026 19:00:08 +0200
 Subject: [PATCH 058/162] winepipewire.drv: Take the loop lock when setting

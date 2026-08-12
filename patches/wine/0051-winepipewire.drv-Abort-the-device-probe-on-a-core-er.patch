@@ -1,4 +1,4 @@
-From 6ca7b7dfe2e254a4e631b6e33e2d9e39c87779ba Mon Sep 17 00:00:00 2001
+From 43d0dd4dae6c2e9372e85aeb6a326132c3fe4969 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Mon, 6 Jul 2026 20:30:45 +0200
 Subject: [PATCH 051/162] winepipewire.drv: Abort the device probe on a core
