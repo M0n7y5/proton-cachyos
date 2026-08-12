@@ -1,0 +1,194 @@
+From 11e73e9feaf07c720739dc9f9b3bf36b4323bcd3 Mon Sep 17 00:00:00 2001
+From: Alexandre Julliard <julliard@winehq.org>
+Date: Wed, 4 Feb 2026 15:29:21 +0100
+Subject: [PATCH 007/162] makefiles: Add support for building pure unixlibs
+ without a PE side.
+
+Keeps the fork's UDEV flags in the winepulse makefile and the per-arch MODULE install rules in makedep.
+
+(partially picked from commit a429176c3264d0c779881faa570fb4c90461b1de)
+---
+ dlls/winealsa.drv/Makefile.in      |  3 ---
+ dlls/winecoreaudio.drv/Makefile.in |  5 +----
+ dlls/wineoss.drv/Makefile.in       |  3 ---
+ dlls/winepulse.drv/Makefile.in     |  2 --
+ tools/make_makefiles               | 22 +++++++++++++---------
+ tools/makedep.c                    | 28 +++++++++++++---------------
+ 6 files changed, 27 insertions(+), 36 deletions(-)
+
+diff --git a/dlls/winealsa.drv/Makefile.in b/dlls/winealsa.drv/Makefile.in
+index 141be3af04f..a059edd3b64 100644
+--- a/dlls/winealsa.drv/Makefile.in
++++ b/dlls/winealsa.drv/Makefile.in
+@@ -1,7 +1,4 @@
+-MODULE    = winealsa.drv
+ UNIXLIB   = winealsa.so
+-IMPORTS   = uuid ole32 advapi32
+-DELAYIMPORTS = winmm
+ UNIX_CFLAGS  = $(ALSA_CFLAGS)
+ UNIX_LIBS    = $(ALSA_LIBS) $(PTHREAD_LIBS)
+ 
+diff --git a/dlls/winecoreaudio.drv/Makefile.in b/dlls/winecoreaudio.drv/Makefile.in
+index 20d0226450a..e8ee5ed433a 100644
+--- a/dlls/winecoreaudio.drv/Makefile.in
++++ b/dlls/winecoreaudio.drv/Makefile.in
+@@ -1,8 +1,5 @@
+-MODULE    = winecoreaudio.drv
+ UNIXLIB   = winecoreaudio.so
+-IMPORTS   = uuid ole32 user32 advapi32
+-DELAYIMPORTS = winmm
+-UNIX_LIBS    = $(COREAUDIO_LIBS)
++UNIX_LIBS = $(COREAUDIO_LIBS)
+ 
+ SOURCES = \
+ 	coreaudio.c \
+diff --git a/dlls/wineoss.drv/Makefile.in b/dlls/wineoss.drv/Makefile.in
+index b8e92e454e6..8923911bba3 100644
+--- a/dlls/wineoss.drv/Makefile.in
++++ b/dlls/wineoss.drv/Makefile.in
+@@ -1,7 +1,4 @@
+-MODULE    = wineoss.drv
+ UNIXLIB   = wineoss.so
+-IMPORTS   = uuid ole32 user32 advapi32
+-DELAYIMPORTS = winmm
+ UNIX_LIBS    = $(OSS4_LIBS) $(PTHREAD_LIBS)
+ UNIX_CFLAGS  = $(OSS4_CFLAGS)
+ 
+diff --git a/dlls/winepulse.drv/Makefile.in b/dlls/winepulse.drv/Makefile.in
+index ba26cae9875..4400b548b9e 100644
+--- a/dlls/winepulse.drv/Makefile.in
++++ b/dlls/winepulse.drv/Makefile.in
+@@ -1,6 +1,4 @@
+-MODULE    = winepulse.drv
+ UNIXLIB   = winepulse.so
+-IMPORTS   = dxguid uuid winmm user32 advapi32 ole32
+ UNIX_LIBS    = $(PULSE_LIBS) $(PTHREAD_LIBS) $(UDEV_LIBS) -lm
+ UNIX_CFLAGS  = $(PULSE_CFLAGS) $(UDEV_CFLAGS)
+ 
+diff --git a/tools/make_makefiles b/tools/make_makefiles
+index eca6bd98f81..f20056dfe74 100755
+--- a/tools/make_makefiles
++++ b/tools/make_makefiles
+@@ -140,7 +140,7 @@ sub parse_makefile($)
+         while (/\\$/) { chop; $_ .= <MAKE>; chomp; }  # merge continued lines
+         next if (/^\s*$/);
+ 
+-        if (/^\s*(MODULE|IMPORTLIB|TESTDLL|STATICLIB|PARENTSRC|EXTRADLLFLAGS)\s*=\s*(.*)/)
++        if (/^\s*(MODULE|IMPORTLIB|TESTDLL|STATICLIB|EXTLIB|UNIXLIB|PARENTSRC|EXTRADLLFLAGS)\s*=\s*(.*)/)
+         {
+             my $var = $1;
+             $make{$var} = $2;
+@@ -154,6 +154,7 @@ sub parse_makefile($)
+             next;
+         }
+     }
++    close MAKE;
+ 
+     return %make;
+ }
+@@ -318,24 +319,29 @@ sub update_makefiles(@)
+         next if $file eq "Makefile.in";
+         my %make = %{$makefiles{$file}};
+         (my $dir = $file) =~ s/^(.*)\/Makefile\.in/$1/;
++
++        die "Only one of MODULE, STATICLIB, EXTLIB, or TESTDLL must be specified in $file"
++            if defined($make{TESTDLL}) + defined($make{STATICLIB}) + defined($make{EXTLIB}) + defined($make{MODULE}) > 1;
++
+         if (defined($make{"TESTDLL"}))  # test
+         {
+             die "TESTDLL should not be defined in $file" unless $file =~ /\/tests\/Makefile\.in$/;
+-            die "MODULE should not be defined in $file" if defined $make{"MODULE"};
+-            die "STATICLIB should not be defined in $file" if defined $make{"STATICLIB"};
+         }
+         elsif (defined($make{"STATICLIB"}))
+         {
+-            die "MODULE should not be defined in $file" if defined $make{"MODULE"};
+             die "invalid STATICLIB name" unless $make{"STATICLIB"} =~ /\.a$/;
+         }
++        elsif (defined($make{"EXTLIB"}))
++        {
++            die "EXTLIB should not be defined in $file" unless $file =~ /^libs\//;
++            die "invalid EXTLIB name" unless $make{"EXTLIB"} =~ /\.a$/;
++        }
+         elsif (defined($make{"MODULE"}))  # dll or program
+         {
+             (my $name = $file) =~ s/^(dlls|programs)\/(.*)\/Makefile\.in/$2/;
+             my $dllflags = $make{"EXTRADLLFLAGS"} || "";
+             die "invalid MODULE name" if $make{"MODULE"} =~ /\.a$/;
+             die "MODULE should not be defined in $file" unless $file =~ /^(dlls|programs)\//;
+-            die "STATICLIB should not be defined in $file" if defined $make{"STATICLIB"};
+             if ($file =~ /^programs\//)
+             {
+                 die "EXTRADLLFLAGS should be defined in $file" unless $dllflags;
+@@ -357,11 +363,9 @@ sub update_makefiles(@)
+                 die "Subsystem should be set to native in $file" unless $dllflags =~ /-Wl,--subsystem,native/;
+             }
+         }
+-        elsif ($file =~ /^tools.*\/Makefile\.in$/)
++        elsif (defined($make{"UNIXLIB"}))
+         {
+-            die "MODULE should not be defined in $file" if defined $make{"MODULE"};
+-            die "STATICLIB should not be defined in $file" if defined $make{"STATICLIB"};
+-            die "EXTRADLLFLAGS should not be defined in $file" if defined $make{"EXTRADLLFLAGS"};
++            die "UNIXLIB should not be defined in $file" unless $file =~ /^dlls\/.*\.drv\/Makefile.kin$/;
+         }
+         push @lines, "WINE_CONFIG_MAKEFILE($dir)\n";
+     }
+diff --git a/tools/makedep.c b/tools/makedep.c
+index 9a07879a1f1..56c918c4ca7 100644
+--- a/tools/makedep.c
++++ b/tools/makedep.c
+@@ -4144,7 +4144,6 @@ static void output_sources( struct makefile *make )
+             if (make->importlib && (is_multiarch( arch ) || (!arch && !is_native_arch_disabled( make ))))
+                 output_import_lib( make, arch );
+         }
+-        if (make->unixlib) output_unix_lib( make );
+         if (make->is_exe && !make->is_win16 && unix_lib_supported && strendswith( make->module, ".exe" ))
+         {
+             char *binary = replace_extension( make->module, ".exe", "" );
+@@ -4158,6 +4157,8 @@ static void output_sources( struct makefile *make )
+     }
+     else if (make->programs.count) output_programs( make );
+ 
++    if (make->unixlib) output_unix_lib( make );
++
+     STRARRAY_FOR_EACH( script, &make->scripts ) install_script( make, script );
+ 
+     STRARRAY_FOR_EACH( target, &make->extra_targets )
+@@ -4632,22 +4633,19 @@ static void load_sources( struct makefile *make )
+     make->is_exe     = strarray_exists( make->extradllflags, "-mconsole" ) ||
+                        strarray_exists( make->extradllflags, "-mwindows" );
+ 
+-    if (make->module)
++    /* add default install rules if nothing was specified */
++    for (i = 0; i < NB_INSTALL_RULES; i++) if (make->install[i].count) break;
++    if (i == NB_INSTALL_RULES && !make->extlib)
+     {
+-        /* add default install rules if nothing was specified */
+-        for (i = 0; i < NB_INSTALL_RULES; i++) if (make->install[i].count) break;
+-        if (i == NB_INSTALL_RULES && !make->extlib)
++        if (make->unixlib) strarray_add( &make->install[INSTALL_UNIXLIB], make->unixlib );
++        if (make->importlib) strarray_add( &make->install[INSTALL_DEV], make->importlib );
++        if (make->staticlib) strarray_add( &make->install[INSTALL_DEV], make->staticlib );
++        else if (make->module) strarray_add( &make->install[INSTALL_LIB], make->module );
++        for (arch = 1; arch < archs.count; arch++)
+         {
+-            if (make->unixlib) strarray_add( &make->install[INSTALL_UNIXLIB], make->unixlib );
+-            if (make->importlib) strarray_add( &make->install[INSTALL_DEV], make->importlib );
+-            if (make->staticlib) strarray_add( &make->install[INSTALL_DEV], make->staticlib );
+-            else strarray_add( &make->install[INSTALL_LIB], make->module );
+-            for (arch = 1; arch < archs.count; arch++)
+-            {
+-                char *module;
+-                if (!(module = get_expanded_arch_var( make, "MODULE", arch ))) continue;
+-                strarray_add( &make->install[INSTALL_LIB], module );
+-            }
++            char *module;
++            if (!(module = get_expanded_arch_var( make, "MODULE", arch ))) continue;
++            strarray_add( &make->install[INSTALL_LIB], module );
+         }
+     }
+ 
+-- 
+2.55.0
+

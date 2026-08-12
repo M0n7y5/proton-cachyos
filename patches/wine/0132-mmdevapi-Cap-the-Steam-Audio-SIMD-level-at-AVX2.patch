@@ -1,0 +1,26 @@
+From a988554b3440e4cb223848c97951bb7556c05f06 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 17:35:39 +0200
+Subject: [PATCH 132/162] mmdevapi: Cap the Steam Audio SIMD level at AVX2.
+
+---
+ dlls/mmdevapi/unix/spatial.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/mmdevapi/unix/spatial.c b/dlls/mmdevapi/unix/spatial.c
+index 5fc1f1781c5..3fc01e697fd 100644
+--- a/dlls/mmdevapi/unix/spatial.c
++++ b/dlls/mmdevapi/unix/spatial.c
+@@ -185,7 +185,8 @@ static NTSTATUS spatial_init(void *args)
+ 
+     memset(&ctx_settings, 0, sizeof(ctx_settings));
+     ctx_settings.version = STEAMAUDIO_VERSION;
+-    ctx_settings.simdLevel = 4; /* allow up to AVX512 */
++    /* AVX512 measures no faster than AVX2 here and can downclock the core. */
++    ctx_settings.simdLevel = 3; /* IPL_SIMDLEVEL_AVX2 */
+     if (p_iplContextCreate(&ctx_settings, &engine->ctx))
+     {
+         WARN("iplContextCreate failed.\n");
+-- 
+2.55.0
+

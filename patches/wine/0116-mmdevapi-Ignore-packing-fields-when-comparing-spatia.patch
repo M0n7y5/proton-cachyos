@@ -1,0 +1,66 @@
+From 14463fb691a0e98176e4d3d97e68f039ab43e0d8 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sat, 13 Jun 2026 00:25:12 +0200
+Subject: [PATCH 116/162] mmdevapi: Ignore packing fields when comparing
+ spatial audio object formats.
+
+(cherry picked from commit dad729731917053e677919c329a130cf25787ec2)
+---
+ dlls/mmdevapi/spatialaudio.c       | 12 ++++++++----
+ dlls/mmdevapi/tests/spatialaudio.c |  2 +-
+ 2 files changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 8ae37cb5b92..7c167154fdf 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -74,9 +74,13 @@ static const char *debugstr_fmtex(const WAVEFORMATEX *fmt)
+     return buf;
+ }
+ 
+-static BOOL formats_equal(const WAVEFORMATEX *fmt1, const WAVEFORMATEX *fmt2)
++static BOOL object_formats_compatible(const WAVEFORMATEX *fmt1, const WAVEFORMATEX *fmt2)
+ {
+-    return !memcmp(fmt1, fmt2, sizeof(*fmt1)) && !memcmp(fmt1 + 1, fmt2 + 1, fmt1->cbSize);
++    /* packing fields (nBlockAlign, nAvgBytesPerSec, cbSize) are not validated by Windows */
++    return fmt1->wFormatTag == fmt2->wFormatTag &&
++           fmt1->nChannels == fmt2->nChannels &&
++           fmt1->nSamplesPerSec == fmt2->nSamplesPerSec &&
++           fmt1->wBitsPerSample == fmt2->wBitsPerSample;
+ }
+ 
+ typedef struct SpatialAudioImpl SpatialAudioImpl;
+@@ -647,7 +651,7 @@ static HRESULT WINAPI SAC_IsAudioObjectFormatSupported(ISpatialAudioClient *ifac
+     if (!format)
+         return E_POINTER;
+ 
+-    if (!formats_equal(&sac->object_fmtex.Format, format))
++    if (!object_formats_compatible(&sac->object_fmtex.Format, format))
+     {
+         FIXME("Reporting format %s as unsupported.\n", debugstr_fmtex(format));
+         return E_INVALIDARG;
+@@ -800,7 +804,7 @@ static HRESULT WINAPI SAC_ActivateSpatialAudioStream(ISpatialAudioClient *iface,
+             return E_INVALIDARG;
+         }
+ 
+-        if(!(params->ObjectFormat && formats_equal(params->ObjectFormat, &This->object_fmtex.Format))) {
++        if(!(params->ObjectFormat && object_formats_compatible(params->ObjectFormat, &This->object_fmtex.Format))) {
+             *stream = NULL;
+             return AUDCLNT_E_UNSUPPORTED_FORMAT;
+         }
+diff --git a/dlls/mmdevapi/tests/spatialaudio.c b/dlls/mmdevapi/tests/spatialaudio.c
+index 2a7fd041060..4969a0bf634 100644
+--- a/dlls/mmdevapi/tests/spatialaudio.c
++++ b/dlls/mmdevapi/tests/spatialaudio.c
+@@ -73,7 +73,7 @@ static void test_formats(void)
+ 
+     format.nBlockAlign *= 2;
+     hr = ISpatialAudioClient_IsAudioObjectFormatSupported(sac, &format);
+-    todo_wine ok(hr == S_OK, "Got %#lx.\n", hr);
++    ok(hr == S_OK, "Got %#lx.\n", hr);
+ 
+     memcpy(&format, fmt, sizeof(format));
+     format.wBitsPerSample *= 2;
+-- 
+2.55.0
+

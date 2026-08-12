@@ -1,0 +1,96 @@
+From 6c0b4b796853d523bd88533560eb7ea2d5090a41 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sun, 14 Jun 2026 02:41:31 +0200
+Subject: [PATCH 128/162] mmdevapi: Trace the spatial audio lifecycle on a
+ dedicated debug channel.
+
+(cherry picked from commit 241580b776495a08d84a8696f8b34a5b0099ccb0)
+---
+ dlls/mmdevapi/spatialaudio.c | 16 +++++++++++++---
+ dlls/mmdevapi/unix/spatial.c |  2 +-
+ 2 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 3b4b12ed1e4..8792a1c3d85 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -42,6 +42,7 @@
+ #include "unix/unixlib.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
++WINE_DECLARE_DEBUG_CHANNEL(spatial);
+ 
+ #define SPATIAL_MAX_DYNAMIC_OBJECTS 112  /* matches Windows Sonic for Headphones */
+ #define SPATIAL_MAX_MIX_OBJECTS (SPATIAL_MAX_DYNAMIC_OBJECTS + 13)  /* dynamic objects + up to 13 static bed channels */
+@@ -68,7 +69,7 @@ static UINT get_spatial_dynamic_budget(void)
+         RegCloseKey(key);
+     }
+ 
+-    TRACE("Spatial sound %s (%s), dynamic object budget %u.\n",
++    TRACE_(spatial)("Spatial sound %s (%s), dynamic object budget %u.\n",
+             enabled ? "enabled" : "disabled", source,
+             enabled ? SPATIAL_MAX_DYNAMIC_OBJECTS : 0);
+ 
+@@ -485,6 +486,9 @@ static HRESULT WINAPI SAORS_Start(ISpatialAudioObjectRenderStream *iface)
+         return hr;
+     }
+ 
++    TRACE_(spatial)("stream %p started, rendering through %s.\n", This,
++            This->engine ? "the Steam Audio HRTF engine" :
++            (This->virtualize_bed ? "stereo panning (HRTF unavailable)" : "multichannel passthrough"));
+     return S_OK;
+ }
+ 
+@@ -1217,6 +1221,10 @@ static HRESULT activate_stream(SpatialAudioStreamImpl *stream)
+ 
+     stream->period_frames = MulDiv(period, stream->stream_fmtex.Format.nSamplesPerSec, 10000000);
+ 
++    TRACE_(spatial)("stream %p configured: %u-channel bed -> %u-channel endpoint, %s, static mask 0x%x, dynamic budget %u.\n",
++            stream, bed_ch, stream->stream_fmtex.Format.nChannels,
++            stream->virtualize_bed ? "HRTF bed virtualization" : "multichannel passthrough",
++            effective_mask, stream->dyn_max);
+     return S_OK;
+ }
+ 
+@@ -1321,7 +1329,7 @@ static HRESULT WINAPI SAC_ActivateSpatialAudioStream(ISpatialAudioClient *iface,
+             if(!WINE_UNIX_CALL(unix_spatial_init, &init_params) &&
+                     (obj->hrtf_buf = calloc(2 * obj->period_frames, sizeof(float)))){
+                 obj->engine = init_params.handle;
+-                TRACE("Using the Steam Audio HRTF engine (bed virtualization %s, up to %u dynamic objects).\n", obj->virtualize_bed ? "on" : "off", obj->dyn_max);
++                TRACE_(spatial)("Using the Steam Audio HRTF engine (bed virtualization %s, up to %u dynamic objects).\n", obj->virtualize_bed ? "on" : "off", obj->dyn_max);
+             }
+             else if(init_params.handle){
+                 struct spatial_release_params release_params;
+@@ -1329,7 +1337,7 @@ static HRESULT WINAPI SAC_ActivateSpatialAudioStream(ISpatialAudioClient *iface,
+                 WINE_UNIX_CALL(unix_spatial_release, &release_params);
+             }
+             if(!obj->engine)
+-                WARN("HRTF engine unavailable, dynamic objects will use stereo panning.\n");
++                WARN_(spatial)("HRTF engine unavailable, dynamic objects will use stereo panning.\n");
+         }
+ 
+         *stream = &obj->ISpatialAudioObjectRenderStream_iface;
+@@ -1475,5 +1483,7 @@ HRESULT SpatialAudioClient_Create(IMMDevice *mmdev, ISpatialAudioClient **out)
+ 
+     *out = &obj->ISpatialAudioClient_iface;
+ 
++    TRACE_(spatial)("client %p created (spatial sound %s, dynamic object budget %u).\n",
++            obj, obj->dyn_budget ? "enabled" : "disabled", obj->dyn_budget);
+     return S_OK;
+ }
+diff --git a/dlls/mmdevapi/unix/spatial.c b/dlls/mmdevapi/unix/spatial.c
+index 64a2b55dc0a..5bd0d358c4c 100644
+--- a/dlls/mmdevapi/unix/spatial.c
++++ b/dlls/mmdevapi/unix/spatial.c
+@@ -39,7 +39,7 @@
+ 
+ #include "unixlib.h"
+ 
+-WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
++WINE_DEFAULT_DEBUG_CHANNEL(spatial);
+ 
+ /* Minimal Steam Audio 4.x C API declarations, from the documented interface
+  * (github.com/ValveSoftware/steam-audio, Apache-2.0).  The library is
+-- 
+2.55.0
+

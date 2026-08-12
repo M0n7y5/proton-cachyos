@@ -1,0 +1,64 @@
+From ea613b7b1205a0fbdc298871fa4830d74c1505ac Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Fri, 12 Jun 2026 18:37:56 +0200
+Subject: [PATCH 035/162] server: Don't allow accessing the context of system
+ threads.
+
+Adapted for 11.0: guarded the queue_apc system-thread check against a NULL thread handle.
+
+(partially picked from commit 720ea07775e97da3486ffddcdb1f1035f65a57d1)
+---
+ server/thread.c | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/server/thread.c b/server/thread.c
+index 46e2982eca5..3a76548617e 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -2161,6 +2161,13 @@ DECL_HANDLER(queue_apc)
+             return;
+         }
+         thread = get_thread_from_handle( req->handle, THREAD_SET_CONTEXT );
++        if (thread && thread->is_system)
++        {
++            release_object( apc );
++            release_object( thread );
++            set_error( STATUS_ACCESS_DENIED );
++            return;
++        }
+         if (thread && call && call->user.flags & SERVER_USER_APC_SPECIAL && is_wow64_process( thread->process ))
+         {
+             release_object( apc );
+@@ -2293,6 +2300,8 @@ DECL_HANDLER(get_thread_context)
+         if (!(thread = get_thread_from_handle( req->handle, THREAD_GET_CONTEXT ))) return;
+         if (req->machine != native_machine && req->machine != thread->process->machine)
+             set_error( STATUS_INVALID_PARAMETER );
++        else if (thread->is_system)
++            set_error( STATUS_ACCESS_DENIED );
+         else if (thread->state != RUNNING)
+             set_error( STATUS_UNSUCCESSFUL );
+         else
+@@ -2375,7 +2384,11 @@ DECL_HANDLER(set_thread_context)
+     if (contexts[CTX_NATIVE].machine != native_machine ||
+         (ctx_count == 2 && contexts[CTX_WOW].machine != thread->process->machine))
+         set_error( STATUS_INVALID_PARAMETER );
+-    else if (thread->state != TERMINATED)
++    else if (thread->is_system)
++        set_error( STATUS_ACCESS_DENIED );
++    else if (thread->state == TERMINATED)
++        set_error( STATUS_UNSUCCESSFUL );
++    else
+     {
+         unsigned int flags = system_flags & contexts[CTX_NATIVE].flags;
+ 
+@@ -2410,7 +2423,6 @@ DECL_HANDLER(set_thread_context)
+             }
+         }
+     }
+-    else set_error( STATUS_UNSUCCESSFUL );
+ 
+     release_object( thread );
+ }
+-- 
+2.55.0
+

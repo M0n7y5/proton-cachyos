@@ -1,0 +1,90 @@
+From f02315bb0b2547e92a4109421b7bc5234d9ee217 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 18:30:36 +0200
+Subject: [PATCH 139/162] mmdevapi: Share the spatial slot bound between the PE
+ and unix sides.
+
+---
+ dlls/mmdevapi/spatialaudio.c |  5 ++---
+ dlls/mmdevapi/unix/spatial.c | 12 ++++++++----
+ dlls/mmdevapi/unix/unixlib.h |  4 ++++
+ 3 files changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 2c6bd667a2a..677ff79ef7d 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -45,7 +45,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
+ WINE_DECLARE_DEBUG_CHANNEL(spatial);
+ 
+ #define SPATIAL_MAX_DYNAMIC_OBJECTS 112  /* matches Windows Sonic for Headphones */
+-#define SPATIAL_MAX_MIX_OBJECTS (SPATIAL_MAX_DYNAMIC_OBJECTS + 16)  /* dynamic objects + up to 16 static bed channels */
+ 
+ static BOOL spatial_option_enabled(const WCHAR *value)
+ {
+@@ -786,7 +785,7 @@ static HRESULT WINAPI SAORS_EndUpdatingAudioObjects(ISpatialAudioObjectRenderStr
+     }
+ 
+     if(This->update_frames > 0){
+-        struct spatial_mix_object mix_objs[SPATIAL_MAX_MIX_OBJECTS];
++        struct spatial_mix_object mix_objs[SPATIAL_MAX_SLOTS];
+         UINT32 mix_count = 0, i;
+ 
+         if(!spatial_stats.started) spatial_stats_start();
+@@ -795,7 +794,7 @@ static HRESULT WINAPI SAORS_EndUpdatingAudioObjects(ISpatialAudioObjectRenderStr
+             if(object->invalidated)
+                 continue;
+             if(This->engine && object->engine_slot != ~0 &&
+-                    mix_count < SPATIAL_MAX_MIX_OBJECTS){
++                    mix_count < SPATIAL_MAX_SLOTS){
+                 mix_objs[mix_count].buffer = (UINT_PTR)object->buf;
+                 mix_objs[mix_count].slot = object->engine_slot;
+                 memcpy(mix_objs[mix_count].pos, object->pos, sizeof(object->pos));
+diff --git a/dlls/mmdevapi/unix/spatial.c b/dlls/mmdevapi/unix/spatial.c
+index 9ee69fcaa54..5b8590db0b4 100644
+--- a/dlls/mmdevapi/unix/spatial.c
++++ b/dlls/mmdevapi/unix/spatial.c
+@@ -149,9 +149,11 @@ fail:
+     phonon_handle = NULL;
+ }
+ 
+-#define SPATIAL_MAX_SLOTS 128
+-
+-/* Calls are serialized by the PE-side stream lock; no locking here. */
++/* One engine per stream, and the PE side holds the stream lock across every
++ * call that touches it, so access is exclusive per engine and nothing here
++ * locks. Two streams do run concurrently: keep this struct free of shared
++ * state, and note that init and release are exclusive by construction (the
++ * stream is unpublished and refcount-zero respectively) rather than by lock. */
+ struct spatial_engine
+ {
+     IPLContext ctx;
+@@ -312,7 +314,9 @@ static NTSTATUS spatial_mix(void *args)
+     float *out_r = (float *)(UINT_PTR)params->out_r;
+     unsigned int i, f;
+ 
+-    if (params->frames != (UINT)engine->audio.frameSize) return STATUS_INVALID_PARAMETER;
++    if (params->frames != (UINT)engine->audio.frameSize ||
++        params->count > SPATIAL_MAX_SLOTS)
++        return STATUS_INVALID_PARAMETER;
+ 
+     for (i = 0; i < params->count; i++)
+     {
+diff --git a/dlls/mmdevapi/unix/unixlib.h b/dlls/mmdevapi/unix/unixlib.h
+index d5a24a2a876..35cd6111a69 100644
+--- a/dlls/mmdevapi/unix/unixlib.h
++++ b/dlls/mmdevapi/unix/unixlib.h
+@@ -52,6 +52,10 @@ struct spatial_object_remove_params
+     UINT slot;
+ };
+ 
++/* Engine effect slots. Every mix entry needs one, so this also bounds the
++ * object array the PE side sends to spatial_mix. */
++#define SPATIAL_MAX_SLOTS 128
++
+ struct spatial_mix_object
+ {
+     UINT64 buffer;   /* mono float[frames] */
+-- 
+2.55.0
+

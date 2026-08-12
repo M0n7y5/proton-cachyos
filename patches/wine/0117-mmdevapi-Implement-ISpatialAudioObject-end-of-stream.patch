@@ -1,0 +1,164 @@
+From 0ad30596558b8e1518a724cce53c60679100be0b Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sat, 13 Jun 2026 00:25:12 +0200
+Subject: [PATCH 117/162] mmdevapi: Implement ISpatialAudioObject end-of-stream
+ and validity tracking.
+
+(cherry picked from commit 3301cf80dd7121871d83c433fe60acd23a0937fb)
+---
+ dlls/mmdevapi/spatialaudio.c       | 48 +++++++++++++++++++++++++++---
+ dlls/mmdevapi/tests/spatialaudio.c | 12 ++++----
+ 2 files changed, 50 insertions(+), 10 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 7c167154fdf..f2e105cf942 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -97,6 +97,9 @@ struct SpatialAudioObjectImpl {
+ 
+     float *buf;
+ 
++    BOOL invalidated;
++    BOOL updated;
++
+     struct list entry;
+ };
+ 
+@@ -213,6 +216,15 @@ static HRESULT WINAPI SAO_GetBuffer(ISpatialAudioObject *iface,
+         return SPTLAUDCLNT_E_OUT_OF_ORDER;
+     }
+ 
++    if(This->invalidated){
++        *buffer = NULL;
++        *bytes = 0;
++        LeaveCriticalSection(&This->sa_stream->lock);
++        return SPTLAUDCLNT_E_RESOURCES_INVALIDATED;
++    }
++
++    This->updated = TRUE;
++
+     *buffer = (BYTE *)This->buf;
+     *bytes = This->sa_stream->update_frames *
+         This->sa_stream->sa_client->object_fmtex.Format.nBlockAlign;
+@@ -225,15 +237,34 @@ static HRESULT WINAPI SAO_GetBuffer(ISpatialAudioObject *iface,
+ static HRESULT WINAPI SAO_SetEndOfStream(ISpatialAudioObject *iface, UINT32 frames)
+ {
+     SpatialAudioObjectImpl *This = impl_from_ISpatialAudioObject(iface);
+-    FIXME("(%p)->(%u)\n", This, frames);
+-    return E_NOTIMPL;
++
++    TRACE("(%p)->(%u)\n", This, frames);
++
++    EnterCriticalSection(&This->sa_stream->lock);
++
++    if(This->sa_stream->update_frames == ~0){
++        LeaveCriticalSection(&This->sa_stream->lock);
++        return SPTLAUDCLNT_E_OUT_OF_ORDER;
++    }
++
++    This->invalidated = TRUE;
++
++    LeaveCriticalSection(&This->sa_stream->lock);
++
++    return S_OK;
+ }
+ 
+ static HRESULT WINAPI SAO_IsActive(ISpatialAudioObject *iface, BOOL *active)
+ {
+     SpatialAudioObjectImpl *This = impl_from_ISpatialAudioObject(iface);
+-    FIXME("(%p)->(%p)\n", This, active);
+-    return E_NOTIMPL;
++
++    TRACE("(%p)->(%p)\n", This, active);
++
++    EnterCriticalSection(&This->sa_stream->lock);
++    *active = !This->invalidated;
++    LeaveCriticalSection(&This->sa_stream->lock);
++
++    return S_OK;
+ }
+ 
+ static HRESULT WINAPI SAO_GetAudioObjectType(ISpatialAudioObject *iface,
+@@ -417,6 +448,7 @@ static HRESULT WINAPI SAORS_BeginUpdatingAudioObjects(ISpatialAudioObjectRenderS
+ 
+         LIST_FOR_EACH_ENTRY(object, &This->objects, SpatialAudioObjectImpl, entry){
+             memset(object->buf, 0, This->update_frames * This->sa_client->object_fmtex.Format.nBlockAlign);
++            object->updated = FALSE;
+         }
+     }else if (!fixme_once){
+         fixme_once = TRUE;
+@@ -465,12 +497,20 @@ static HRESULT WINAPI SAORS_EndUpdatingAudioObjects(ISpatialAudioObjectRenderStr
+ 
+     if(This->update_frames > 0){
+         LIST_FOR_EACH_ENTRY(object, &This->objects, SpatialAudioObjectImpl, entry){
++            if(object->invalidated)
++                continue;
+             if(object->type != AudioObjectType_Dynamic)
+                 mix_static_object(This, object);
+             else
+                 WARN("Don't know how to mix dynamic object yet. %p\n", object);
+         }
+ 
++        /* an object that misses an update cycle is invalidated */
++        LIST_FOR_EACH_ENTRY(object, &This->objects, SpatialAudioObjectImpl, entry){
++            if(!object->updated)
++                object->invalidated = TRUE;
++        }
++
+         hr = IAudioRenderClient_ReleaseBuffer(This->render, This->update_frames, 0);
+         if(FAILED(hr))
+             WARN("ReleaseBuffer failed: %08lx\n", hr);
+diff --git a/dlls/mmdevapi/tests/spatialaudio.c b/dlls/mmdevapi/tests/spatialaudio.c
+index 4969a0bf634..ed5c6b672b1 100644
+--- a/dlls/mmdevapi/tests/spatialaudio.c
++++ b/dlls/mmdevapi/tests/spatialaudio.c
+@@ -259,7 +259,7 @@ static void test_audio_object_activation(void)
+     hr = ISpatialAudioObjectRenderStream_ActivateSpatialAudioObject(sas, AudioObjectType_FrontLeft, &sao1);
+     ok(hr == S_OK, "Failed to activate spatial audio object: 0x%08lx\n", hr);
+     hr = ISpatialAudioObject_IsActive(sao1, &is_active);
+-    todo_wine ok(hr == S_OK, "Failed to check if spatial audio object is active: 0x%08lx\n", hr);
++    ok(hr == S_OK, "Failed to check if spatial audio object is active: 0x%08lx\n", hr);
+     if (hr == S_OK)
+         ok(is_active, "Expected spatial audio object to be active\n");
+ 
+@@ -428,13 +428,13 @@ static void test_audio_object_buffers(void)
+ 
+     /* ending the stream */
+     hr = ISpatialAudioObject_SetEndOfStream(sao[0], 0);
+-    todo_wine ok(hr == SPTLAUDCLNT_E_OUT_OF_ORDER, "Expected that ending the stream at this point won't be allowed: 0x%08lx\n", hr);
++    ok(hr == SPTLAUDCLNT_E_OUT_OF_ORDER, "Expected that ending the stream at this point won't be allowed: 0x%08lx\n", hr);
+ 
+     hr = WaitForSingleObject(event, 200);
+     ok(hr == WAIT_OBJECT_0, "Expected event to be flagged: 0x%08lx\n", hr);
+ 
+     hr = ISpatialAudioObject_SetEndOfStream(sao[0], 0);
+-    todo_wine ok(hr == SPTLAUDCLNT_E_OUT_OF_ORDER, "Expected that ending the stream at this point won't be allowed: 0x%08lx\n", hr);
++    ok(hr == SPTLAUDCLNT_E_OUT_OF_ORDER, "Expected that ending the stream at this point won't be allowed: 0x%08lx\n", hr);
+ 
+     hr = ISpatialAudioObjectRenderStream_BeginUpdatingAudioObjects(sas, &dyn_object_count, &frame_count);
+     ok(hr == S_OK, "Failed to begin updating audio objects: 0x%08lx\n", hr);
+@@ -442,7 +442,7 @@ static void test_audio_object_buffers(void)
+ 
+     /* expect the object that was not updated last cycle to be invalidated */
+     hr = ISpatialAudioObject_GetBuffer(sao[ARRAYSIZE(sao) - 1], &buffer, &buffer_length);
+-    todo_wine ok(hr == SPTLAUDCLNT_E_RESOURCES_INVALIDATED, "Expected audio object to be invalidated: 0x%08lx\n", hr);
++    ok(hr == SPTLAUDCLNT_E_RESOURCES_INVALIDATED, "Expected audio object to be invalidated: 0x%08lx\n", hr);
+ 
+     for (i = 0; i < ARRAYSIZE(sao) - 1; i++)
+     {
+@@ -450,10 +450,10 @@ static void test_audio_object_buffers(void)
+         ok(hr == S_OK, "Expected to be able to get buffers for audio object: 0x%08lx\n", hr);
+ 
+         hr = ISpatialAudioObject_SetEndOfStream(sao[i], 0);
+-        todo_wine ok(hr == S_OK, "Failed to end the stream: 0x%08lx\n", hr);
++        ok(hr == S_OK, "Failed to end the stream: 0x%08lx\n", hr);
+ 
+         hr = ISpatialAudioObject_GetBuffer(sao[i], &buffer, &buffer_length);
+-        todo_wine ok(hr == SPTLAUDCLNT_E_RESOURCES_INVALIDATED, "Expected audio object to be invalidated: 0x%08lx\n", hr);
++        ok(hr == SPTLAUDCLNT_E_RESOURCES_INVALIDATED, "Expected audio object to be invalidated: 0x%08lx\n", hr);
+     }
+ 
+     hr = ISpatialAudioObjectRenderStream_EndUpdatingAudioObjects(sas);
+-- 
+2.55.0
+

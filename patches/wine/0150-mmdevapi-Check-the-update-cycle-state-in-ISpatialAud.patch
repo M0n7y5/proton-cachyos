@@ -1,0 +1,39 @@
+From b4d460c644bb6734cc5af2feecf32359267766d0 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Wed, 12 Aug 2026 19:27:04 +0200
+Subject: [PATCH 150/162] mmdevapi: Check the update cycle state in
+ ISpatialAudioObject::SetPosition.
+
+---
+ dlls/mmdevapi/spatialaudio.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 65d5634e69c..349b1aa4777 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -387,9 +387,21 @@ static HRESULT WINAPI SAO_SetPosition(ISpatialAudioObject *iface, float x,
+         return SPTLAUDCLNT_E_PROPERTY_NOT_SUPPORTED;
+ 
+     EnterCriticalSection(&This->sa_stream->lock);
++
++    if(This->sa_stream->update_frames == ~0){
++        LeaveCriticalSection(&This->sa_stream->lock);
++        return SPTLAUDCLNT_E_OUT_OF_ORDER;
++    }
++
++    if(This->invalidated){
++        LeaveCriticalSection(&This->sa_stream->lock);
++        return SPTLAUDCLNT_E_RESOURCES_INVALIDATED;
++    }
++
+     This->pos[0] = x;
+     This->pos[1] = y;
+     This->pos[2] = z;
++
+     LeaveCriticalSection(&This->sa_stream->lock);
+ 
+     return S_OK;
+-- 
+2.55.0
+

@@ -1,0 +1,77 @@
+From 9da34044f9b7d04807479c55ea753589ee8caa7d Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 21:56:11 +0200
+Subject: [PATCH 147/162] mmdevapi: Do not query for format support in spatial
+ audio.
+
+When using AUTOCONVERTPCM all PCM formats are supported.
+
+Upstream: e237972495de7a70aef6587f332236292d69fa22
+Author: Giovanni Mascellani <gmascellani@codeweavers.com>
+---
+ dlls/mmdevapi/spatialaudio.c | 42 ------------------------------------
+ 1 file changed, 42 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 6123d9a7723..65d5634e69c 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -1495,9 +1495,6 @@ static IAudioFormatEnumeratorVtbl IAudioFormatEnumerator_vtbl = {
+ HRESULT SpatialAudioClient_Create(IMMDevice *mmdev, ISpatialAudioClient **out)
+ {
+     SpatialAudioImpl *obj;
+-    IAudioClient *aclient;
+-    WAVEFORMATEX *closest;
+-    HRESULT hr;
+ 
+     obj = calloc(1, sizeof(*obj));
+ 
+@@ -1514,45 +1511,6 @@ HRESULT SpatialAudioClient_Create(IMMDevice *mmdev, ISpatialAudioClient **out)
+     obj->object_fmtex.Format.nAvgBytesPerSec = obj->object_fmtex.Format.nSamplesPerSec * obj->object_fmtex.Format.nBlockAlign;
+     obj->object_fmtex.Format.cbSize = 0;
+ 
+-    hr = IMMDevice_Activate(mmdev, &IID_IAudioClient,
+-            CLSCTX_INPROC_SERVER, NULL, (void**)&aclient);
+-    if(FAILED(hr)){
+-        WARN("Activate failed: %08lx\n", hr);
+-        free(obj);
+-        return hr;
+-    }
+-
+-    hr = IAudioClient_IsFormatSupported(aclient, AUDCLNT_SHAREMODE_SHARED, &obj->object_fmtex.Format, &closest);
+-
+-    IAudioClient_Release(aclient);
+-
+-    if(hr == S_FALSE){
+-        if(sizeof(WAVEFORMATEX) + closest->cbSize > sizeof(obj->object_fmtex)){
+-            ERR("Returned format too large: %s\n", debugstr_fmtex(closest));
+-            CoTaskMemFree(closest);
+-            free(obj);
+-            return AUDCLNT_E_UNSUPPORTED_FORMAT;
+-        }else if(!((closest->wFormatTag == WAVE_FORMAT_IEEE_FLOAT ||
+-                    (closest->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+-                     IsEqualGUID(&((WAVEFORMATEXTENSIBLE *)closest)->SubFormat,
+-                         &KSDATAFORMAT_SUBTYPE_IEEE_FLOAT))) &&
+-                    closest->wBitsPerSample == 32)){
+-            ERR("Returned format not 32-bit float: %s\n", debugstr_fmtex(closest));
+-            CoTaskMemFree(closest);
+-            free(obj);
+-            return AUDCLNT_E_UNSUPPORTED_FORMAT;
+-        }
+-        WARN("The audio stack doesn't support 48kHz 32bit float. Using the closest match. Audio may be glitchy. %s\n", debugstr_fmtex(closest));
+-        memcpy(&obj->object_fmtex,
+-               closest,
+-               sizeof(WAVEFORMATEX) + closest->cbSize);
+-        CoTaskMemFree(closest);
+-    } else if(hr != S_OK){
+-        WARN("Checking supported formats failed: %08lx\n", hr);
+-        free(obj);
+-        return hr;
+-    }
+-
+     obj->mmdev = mmdev;
+     IMMDevice_AddRef(mmdev);
+ 
+-- 
+2.55.0
+

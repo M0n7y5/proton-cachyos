@@ -1,0 +1,53 @@
+From 37c11c6d47317e0ffb6720b858781e3dbd708616 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sat, 13 Jun 2026 00:54:49 +0200
+Subject: [PATCH 121/162] mmdevapi: Allow enabling spatial sound with the
+ WINE_SPATIAL_SOUND environment variable.
+
+(cherry picked from commit ccb59b0bc5892727147e921f8197b197c11c592a)
+---
+ dlls/mmdevapi/spatialaudio.c | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 090febc366c..22d14db64ee 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -45,19 +45,32 @@ WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
+ 
+ #define SPATIAL_MAX_DYNAMIC_OBJECTS 112  /* matches Windows Sonic for Headphones */
+ 
++static BOOL spatial_option_enabled(const WCHAR *value)
++{
++    return *value == 'y' || *value == 'Y' || *value == 't' || *value == 'T' || *value == '1';
++}
++
+ static UINT get_spatial_dynamic_budget(void)
+ {
+     WCHAR buf[16];
+     DWORD size = sizeof(buf);
+     HKEY key;
+     BOOL enabled = FALSE;
++    const char *source = "registry";
+ 
+-    if(RegOpenKeyW(HKEY_CURRENT_USER, L"Software\\Wine\\mmdevapi", &key) == ERROR_SUCCESS){
++    if(GetEnvironmentVariableW(L"WINE_SPATIAL_SOUND", buf, ARRAY_SIZE(buf))){
++        enabled = spatial_option_enabled(buf);
++        source = "environment";
++    }else if(RegOpenKeyW(HKEY_CURRENT_USER, L"Software\\Wine\\mmdevapi", &key) == ERROR_SUCCESS){
+         if(RegQueryValueExW(key, L"SpatialSound", 0, NULL, (BYTE*)buf, &size) == ERROR_SUCCESS)
+-            enabled = buf[0] == 'y' || buf[0] == 'Y' || buf[0] == 't' || buf[0] == 'T' || buf[0] == '1';
++            enabled = spatial_option_enabled(buf);
+         RegCloseKey(key);
+     }
+ 
++    TRACE("Spatial sound %s (%s), dynamic object budget %u.\n",
++            enabled ? "enabled" : "disabled", source,
++            enabled ? SPATIAL_MAX_DYNAMIC_OBJECTS : 0);
++
+     return enabled ? SPATIAL_MAX_DYNAMIC_OBJECTS : 0;
+ }
+ 
+-- 
+2.55.0
+

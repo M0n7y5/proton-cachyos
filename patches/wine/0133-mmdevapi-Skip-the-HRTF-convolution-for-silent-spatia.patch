@@ -1,0 +1,84 @@
+From 5f9442412fc40b05fbd2deb7009356d37cdae2fb Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 17:35:39 +0200
+Subject: [PATCH 133/162] mmdevapi: Skip the HRTF convolution for silent
+ spatial objects.
+
+---
+ dlls/mmdevapi/unix/spatial.c | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/mmdevapi/unix/spatial.c b/dlls/mmdevapi/unix/spatial.c
+index 3fc01e697fd..042424878de 100644
+--- a/dlls/mmdevapi/unix/spatial.c
++++ b/dlls/mmdevapi/unix/spatial.c
+@@ -95,6 +95,7 @@ typedef struct {
+ } IPLBinauralEffectParams;
+ 
+ #define STEAMAUDIO_VERSION ((4u << 16) | (8u << 8) | 1u)
++#define IPL_AUDIOEFFECTSTATE_TAILCOMPLETE 1
+ 
+ static int (*p_iplContextCreate)(IPLContextSettings *, IPLContext *);
+ static void (*p_iplContextRelease)(IPLContext *);
+@@ -156,6 +157,7 @@ struct spatial_engine
+     IPLHRTF hrtf;
+     IPLAudioSettings audio;
+     IPLBinauralEffect effects[SPATIAL_MAX_SLOTS];
++    unsigned char tail_pending[SPATIAL_MAX_SLOTS]; /* skipping a live tail clicks */
+     float *scratch;     /* 2 * frames, deinterleaved L then R */
+     int bass_on;        /* WINE_SPATIAL_BASS one-pole low-shelf active */
+     float bass_g;       /* LF gain, 0..1 (1 = unchanged) */
+@@ -264,6 +266,7 @@ static NTSTATUS spatial_object_add(void *args)
+         return STATUS_NOT_SUPPORTED;
+     }
+ 
++    engine->tail_pending[i] = 0;
+     params->slot = i;
+     return STATUS_SUCCESS;
+ }
+@@ -280,6 +283,15 @@ static NTSTATUS spatial_object_remove(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
++static int buffer_is_silent(const float *p, UINT frames)
++{
++    UINT i;
++
++    for (i = 0; i < frames; i++)
++        if (p[i] != 0.0f) return 0;
++    return 1;
++}
++
+ static NTSTATUS spatial_mix(void *args)
+ {
+     struct spatial_mix_params *params = args;
+@@ -298,10 +310,15 @@ static NTSTATUS spatial_mix(void *args)
+         float *in_data = (float *)(UINT_PTR)objs[i].buffer;
+         float *out_data[2];
+         float len;
++        int silent, state;
+ 
+         if (objs[i].slot >= SPATIAL_MAX_SLOTS || !engine->effects[objs[i].slot])
+             continue;
+ 
++        silent = buffer_is_silent(in_data, params->frames);
++        if (silent && !engine->tail_pending[objs[i].slot])
++            continue;
++
+         len = sqrtf(objs[i].pos[0] * objs[i].pos[0] +
+                     objs[i].pos[1] * objs[i].pos[1] +
+                     objs[i].pos[2] * objs[i].pos[2]);
+@@ -334,7 +351,9 @@ static NTSTATUS spatial_mix(void *args)
+         out.numSamples = params->frames;
+         out.data = out_data;
+ 
+-        p_iplBinauralEffectApply(engine->effects[objs[i].slot], &effect_params, &in, &out);
++        state = p_iplBinauralEffectApply(engine->effects[objs[i].slot], &effect_params, &in, &out);
++        engine->tail_pending[objs[i].slot] =
++                !silent || state != IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
+ 
+         for (f = 0; f < params->frames; f++)
+         {
+-- 
+2.55.0
+

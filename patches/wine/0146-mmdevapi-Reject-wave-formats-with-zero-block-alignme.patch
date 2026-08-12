@@ -1,0 +1,31 @@
+From 054aaa175f1bf9e4bb60f18da247c49691b811a2 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 21:55:22 +0200
+Subject: [PATCH 146/162] mmdevapi: Reject wave formats with zero block
+ alignment.
+
+The ALSA driver uses it as a divisor.
+
+Wine-Bug: not filed
+Upstream: af737dab8d9b455af4751e2f9a5cd6785dd82dd6
+Author: Giovanni Mascellani <gmascellani@codeweavers.com>
+---
+ dlls/mmdevapi/client.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/mmdevapi/client.c b/dlls/mmdevapi/client.c
+index 6d86bffe440..df10aca3099 100644
+--- a/dlls/mmdevapi/client.c
++++ b/dlls/mmdevapi/client.c
+@@ -337,7 +337,7 @@ static HRESULT validate_wfx(const WAVEFORMATEX *fmt, AUDCLNT_SHAREMODE share_mod
+     if (FAILED(ret))
+         return ret;
+ 
+-    if (fmt->nSamplesPerSec == 0)
++    if (fmt->nSamplesPerSec == 0 || fmt->nBlockAlign == 0)
+         ret = E_INVALIDARG;
+ 
+     switch (fmt->wFormatTag) {
+-- 
+2.55.0
+

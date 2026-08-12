@@ -1,0 +1,62 @@
+From fda08875dcf14455a1f56f849012f8ead0d0ecb8 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sat, 13 Jun 2026 10:51:49 +0200
+Subject: [PATCH 124/162] mmdevapi: Implement ISpatialAudioClient spatial
+ stream availability queries.
+
+(cherry picked from commit f4b9cbf021c10d0f4bd40d1c02d6fcb27ce5ad38)
+---
+ dlls/mmdevapi/spatialaudio.c | 30 ++++++++++++++++++++++++++----
+ 1 file changed, 26 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 3841bcc7333..94d860cd4d1 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -804,8 +804,21 @@ static HRESULT WINAPI SAC_GetNativeStaticObjectTypeMask(ISpatialAudioClient *ifa
+         AudioObjectType *mask)
+ {
+     SpatialAudioImpl *This = impl_from_ISpatialAudioClient(iface);
+-    FIXME("(%p)->(%p)\n", This, mask);
+-    return E_NOTIMPL;
++
++    TRACE("(%p)->(%p)\n", This, mask);
++
++    if(!This->dyn_budget)
++        return E_NOTIMPL;
++
++    /* Windows Sonic for Headphones advertises a 7.1 native bed regardless of the
++     * physical endpoint; height/Atmos channels arrive as dynamic objects, never as
++     * static bed channels, so AudioObjectType_Dynamic and the TOP_* bits are excluded. */
++    *mask = AudioObjectType_FrontLeft | AudioObjectType_FrontRight |
++            AudioObjectType_FrontCenter | AudioObjectType_LowFrequency |
++            AudioObjectType_SideLeft | AudioObjectType_SideRight |
++            AudioObjectType_BackLeft | AudioObjectType_BackRight;
++
++    return S_OK;
+ }
+ 
+ static HRESULT WINAPI SAC_GetMaxDynamicObjectCount(ISpatialAudioClient *iface,
+@@ -871,8 +884,17 @@ static HRESULT WINAPI SAC_IsSpatialAudioStreamAvailable(ISpatialAudioClient *ifa
+         REFIID stream_uuid, const PROPVARIANT *info)
+ {
+     SpatialAudioImpl *This = impl_from_ISpatialAudioClient(iface);
+-    FIXME("(%p)->(%s, %p)\n", This, debugstr_guid(stream_uuid), info);
+-    return E_NOTIMPL;
++
++    TRACE("(%p)->(%s, %p)\n", This, debugstr_guid(stream_uuid), info);
++
++    if(!This->dyn_budget)
++        return E_NOTIMPL;
++
++    if(IsEqualIID(stream_uuid, &IID_ISpatialAudioObjectRenderStream))
++        return S_OK;
++
++    WARN("Unsupported spatial stream %s.\n", debugstr_guid(stream_uuid));
++    return SPTLAUDCLNT_E_STREAM_NOT_AVAILABLE;
+ }
+ 
+ static WAVEFORMATEX *clone_fmtex(const WAVEFORMATEX *src)
+-- 
+2.55.0
+

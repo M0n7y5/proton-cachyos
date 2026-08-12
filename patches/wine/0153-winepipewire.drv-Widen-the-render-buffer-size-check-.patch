@@ -1,0 +1,28 @@
+From 7336d05bcf965481405ae5abba17cb47663db12f Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Wed, 12 Aug 2026 19:36:06 +0200
+Subject: [PATCH 153/162] winepipewire.drv: Widen the render buffer size check
+ to 64 bits.
+
+---
+ dlls/winepipewire.drv/pipewire.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index bc5c3d7b7ad..f98d7940d47 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -3840,7 +3840,9 @@ static NTSTATUS pipewire_get_render_buffer(void *args)
+         return STATUS_SUCCESS;
+     }
+ 
+-    if (stream->held_bytes / stream->frame_size + params->frames > stream->bufsize_frames)
++    /* UINT64: SIZE_T is 32 bits on the i386 unixlib, where this sum wraps and
++     * lets an oversized frame count past the guard. */
++    if ((UINT64)(stream->held_bytes / stream->frame_size) + params->frames > stream->bufsize_frames)
+     {
+         pw_thread_loop_unlock(pw_loop_global);
+         params->result = AUDCLNT_E_BUFFER_TOO_LARGE;
+-- 
+2.55.0
+

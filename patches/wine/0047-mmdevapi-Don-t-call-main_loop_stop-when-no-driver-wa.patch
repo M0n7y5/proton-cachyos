@@ -1,0 +1,28 @@
+From 40e6af4f190c23e77a3d597195e7d45802266527 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Mon, 6 Jul 2026 20:29:30 +0200
+Subject: [PATCH 047/162] mmdevapi: Don't call main_loop_stop when no driver
+ was loaded.
+
+---
+ dlls/mmdevapi/main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/mmdevapi/main.c b/dlls/mmdevapi/main.c
+index 6830dc3543e..77de59d079b 100644
+--- a/dlls/mmdevapi/main.c
++++ b/dlls/mmdevapi/main.c
+@@ -214,9 +214,9 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+             }
+             if (lpvReserved) break;
+ 
+-            wine_unix_call( main_loop_stop, NULL );
+             if (drvs.module_unixlib)
+             {
++                wine_unix_call( main_loop_stop, NULL );
+                 __wine_unload_unix_lib( drvs.module );
+                 if (midi_driver.module != drvs.module) __wine_unload_unix_lib( midi_driver.module );
+             }
+-- 
+2.55.0
+

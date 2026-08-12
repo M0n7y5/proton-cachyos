@@ -1,0 +1,77 @@
+From 26766b870c7a53fb54845d6afe94775490bfba16 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 19 Jun 2026 17:35:57 -0600
+Subject: [PATCH 162/162] mmdevapi: Implement SAORS_Reset().
+
+(cherry picked from commit 50b2b383184b2041b8697ae9276cac12af89856a)
+---
+ dlls/mmdevapi/spatialaudio.c       | 10 ++++++++--
+ dlls/mmdevapi/tests/spatialaudio.c | 24 ++++++++++++++++++++++++
+ 2 files changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index c95a3a1f001..e2bd7423a91 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -566,8 +566,14 @@ static HRESULT WINAPI SAORS_Stop(ISpatialAudioObjectRenderStream *iface)
+ static HRESULT WINAPI SAORS_Reset(ISpatialAudioObjectRenderStream *iface)
+ {
+     SpatialAudioStreamImpl *This = impl_from_ISpatialAudioObjectRenderStream(iface);
+-    FIXME("(%p)->()\n", This);
+-    return E_NOTIMPL;
++    HRESULT hr;
++
++    TRACE("(%p)->()\n", This);
++
++    hr = IAudioClient_Reset(This->client);
++    if (hr == AUDCLNT_E_NOT_STOPPED)
++        return SPTLAUDCLNT_E_STREAM_NOT_STOPPED;
++    return hr;
+ }
+ 
+ static HRESULT WINAPI SAORS_BeginUpdatingAudioObjects(ISpatialAudioObjectRenderStream *iface,
+diff --git a/dlls/mmdevapi/tests/spatialaudio.c b/dlls/mmdevapi/tests/spatialaudio.c
+index d2b96b57ac9..7a1212293e2 100644
+--- a/dlls/mmdevapi/tests/spatialaudio.c
++++ b/dlls/mmdevapi/tests/spatialaudio.c
+@@ -309,6 +309,9 @@ static void test_audio_object_buffers(void)
+     hr = ISpatialAudioClient_ActivateSpatialAudioStream(sac, &activation_params_prop, &IID_ISpatialAudioObjectRenderStream, (void**)&sas);
+     ok(hr == S_OK, "Failed to activate spatial audio stream: 0x%08lx\n", hr);
+ 
++    hr = ISpatialAudioObjectRenderStream_Reset(sas);
++    ok(hr == S_OK, "got %#lx.\n", hr);
++
+     hr = ISpatialAudioClient_GetMaxFrameCount(sac, &format, &max_frame_count);
+     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+     frame_count = format.nSamplesPerSec / 100; /* 10ms */
+@@ -471,6 +474,27 @@ static void test_audio_object_buffers(void)
+     hr = ISpatialAudioObjectRenderStream_EndUpdatingAudioObjects(sas);
+     ok(hr == S_OK, "Failed to end updating audio objects: 0x%08lx\n", hr);
+ 
++    hr = ISpatialAudioObjectRenderStream_Reset(sas);
++    ok(hr == SPTLAUDCLNT_E_STREAM_NOT_STOPPED, "got %#lx.\n", hr);
++
++    hr = ISpatialAudioObjectRenderStream_Stop(sas);
++    ok(hr == S_OK, "got %#lx.\n", hr);
++
++    hr = ISpatialAudioObjectRenderStream_Reset(sas);
++    ok(hr == S_OK, "got %#lx.\n", hr);
++
++    hr = ISpatialAudioObjectRenderStream_BeginUpdatingAudioObjects(sas, &dyn_object_count, &frame_count);
++    ok(hr == S_OK, "got %#lx.\n", hr);
++
++    hr = ISpatialAudioObjectRenderStream_Reset(sas);
++    todo_wine ok(hr == S_OK, "got %#lx.\n", hr);
++
++    hr = ISpatialAudioObjectRenderStream_EndUpdatingAudioObjects(sas);
++    ok(hr == S_OK, "got %#lx.\n", hr);
++
++    hr = ISpatialAudioObjectRenderStream_Reset(sas);
++    ok(hr == S_OK, "got %#lx.\n", hr);
++
+     for (i = 0; i < ARRAYSIZE(sao); i++)
+     {
+         ISpatialAudioObject_Release(sao[i]);
+-- 
+2.55.0
+

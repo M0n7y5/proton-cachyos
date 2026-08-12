@@ -1,0 +1,441 @@
+From 267deb7a8ae448ec067f69b42d9c961eb519c759 Mon Sep 17 00:00:00 2001
+From: Alexandre Julliard <julliard@winehq.org>
+Date: Fri, 15 May 2026 11:48:52 +0200
+Subject: [PATCH 009/162] mmdevapi: Use a system thread for the audio driver
+ main loop thread.
+
+Adapted to the 11.0-era mmdevapi context; the fork's winepulse processes streams from the PulseAudio main loop, so only its entry points are converted.
+
+(partially picked from commit a70f1eb8ee277dadc1a0a24592e20887469c136f)
+---
+ dlls/mmdevapi/client.c             | 46 +-------------------------
+ dlls/mmdevapi/main.c               |  2 +-
+ dlls/mmdevapi/mmdevapi_private.h   |  2 --
+ dlls/mmdevapi/unixlib.h            | 27 +++++++++++----
+ dlls/winealsa.drv/alsa.c           | 26 +++------------
+ dlls/winecoreaudio.drv/coreaudio.c | 26 +++------------
+ dlls/wineoss.drv/oss.c             | 26 +++------------
+ dlls/winepulse.drv/pulse.c         | 53 ++++++++++++++++++++----------
+ 8 files changed, 70 insertions(+), 138 deletions(-)
+
+diff --git a/dlls/mmdevapi/client.c b/dlls/mmdevapi/client.c
+index 92a33fede5e..1c930d932a7 100644
+--- a/dlls/mmdevapi/client.c
++++ b/dlls/mmdevapi/client.c
+@@ -50,16 +50,6 @@ extern HRESULT get_audio_session(const GUID *sessionguid, IMMDevice *device, UIN
+                                  struct audio_session **out);
+ extern struct audio_session_wrapper *session_wrapper_create(struct audio_client *client);
+ 
+-static HANDLE main_loop_thread;
+-
+-void main_loop_stop(void)
+-{
+-    if (main_loop_thread) {
+-        WaitForSingleObject(main_loop_thread, INFINITE);
+-        CloseHandle(main_loop_thread);
+-    }
+-}
+-
+ void set_stream_volumes(struct audio_client *This)
+ {
+     struct set_volumes_params params;
+@@ -210,37 +200,6 @@ static void dump_fmt(const WAVEFORMATEX *fmt)
+     }
+ }
+ 
+-static DWORD CALLBACK main_loop_func(void *event)
+-{
+-    struct main_loop_params params;
+-
+-    SetThreadDescription(GetCurrentThread(), L"audio_client_main");
+-
+-    params.event = event;
+-
+-    wine_unix_call(main_loop, &params);
+-
+-    return 0;
+-}
+-
+-HRESULT main_loop_start(void)
+-{
+-    if (!main_loop_thread) {
+-        HANDLE event = CreateEventW(NULL, TRUE, FALSE, NULL);
+-        if (!(main_loop_thread = CreateThread(NULL, 0, main_loop_func, event, 0, NULL))) {
+-            ERR("Failed to create main loop thread\n");
+-            CloseHandle(event);
+-            return E_FAIL;
+-        }
+-
+-        SetThreadPriority(main_loop_thread, THREAD_PRIORITY_TIME_CRITICAL);
+-        WaitForSingleObject(event, INFINITE);
+-        CloseHandle(event);
+-    }
+-
+-    return S_OK;
+-}
+-
+ static DWORD CALLBACK timer_loop_func(void *user)
+ {
+     struct timer_loop_params params;
+@@ -532,10 +491,7 @@ static HRESULT stream_init(struct audio_client *client, const BOOLEAN force_def_
+         return AUDCLNT_E_ALREADY_INITIALIZED;
+     }
+ 
+-    if (FAILED(params.result = main_loop_start())) {
+-        sessions_unlock();
+-        return params.result;
+-    }
++    wine_unix_call( main_loop_start, NULL );
+ 
+     if (flags & AUDCLNT_STREAMFLAGS_LOOPBACK) {
+         struct get_loopback_capture_device_params params;
+diff --git a/dlls/mmdevapi/main.c b/dlls/mmdevapi/main.c
+index ec45e3957aa..d760e7f87f7 100644
+--- a/dlls/mmdevapi/main.c
++++ b/dlls/mmdevapi/main.c
+@@ -212,7 +212,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+             }
+             if (lpvReserved) break;
+ 
+-            main_loop_stop();
++            wine_unix_call( main_loop_stop, NULL );
+             if (drvs.module_unixlib)
+             {
+                 __wine_unload_unix_lib( drvs.module );
+diff --git a/dlls/mmdevapi/mmdevapi_private.h b/dlls/mmdevapi/mmdevapi_private.h
+index 65c98229c78..6df38b7f8a7 100644
+--- a/dlls/mmdevapi/mmdevapi_private.h
++++ b/dlls/mmdevapi/mmdevapi_private.h
+@@ -129,8 +129,6 @@ extern BOOL get_device_name_from_guid( const GUID *guid, char **name, EDataFlow
+ extern HRESULT load_devices_from_reg(void);
+ extern HRESULT load_driver_devices(EDataFlow flow);
+ 
+-extern void main_loop_stop(void);
+-
+ extern const WCHAR drv_keyW[];
+ 
+ extern HRESULT get_audio_sessions(IMMDevice *device, GUID **ret, int *ret_count);
+diff --git a/dlls/mmdevapi/unixlib.h b/dlls/mmdevapi/unixlib.h
+index 3df13e93b39..c46a4ff4e98 100644
+--- a/dlls/mmdevapi/unixlib.h
++++ b/dlls/mmdevapi/unixlib.h
+@@ -20,6 +20,25 @@
+ #include "audioclient.h"
+ #include "mmdeviceapi.h"
+ 
++#ifdef WINE_UNIX_LIB
++/* helper to create a thread on the Unix side */
++static inline NTSTATUS create_unix_thread( HANDLE *handle, const WCHAR *name,
++                                           void (*entry)(void *), void *param )
++{
++    DWORD priority = THREAD_PRIORITY_TIME_CRITICAL;
++    THREAD_NAME_INFORMATION info;
++    NTSTATUS status;
++
++    if (!(status = PsCreateSystemThread( handle, THREAD_ALL_ACCESS, NULL, 0, NULL, entry, param )))
++    {
++        RtlInitUnicodeString( &info.ThreadName, name );
++        NtSetInformationThread( *handle, ThreadNameInformation, &info, sizeof(info) );
++        NtSetInformationThread( *handle, ThreadBasePriority, &priority, sizeof(priority) );
++    }
++    return status;
++}
++#endif
++
+ typedef UINT64 stream_handle;
+ 
+ enum driver_priority
+@@ -36,11 +55,6 @@ struct endpoint
+     unsigned int device;
+ };
+ 
+-struct main_loop_params
+-{
+-    HANDLE event;
+-};
+-
+ struct get_endpoint_ids_params
+ {
+     EDataFlow flow;
+@@ -315,7 +329,8 @@ enum unix_funcs
+ {
+     process_attach,
+     process_detach,
+-    main_loop,
++    main_loop_start,
++    main_loop_stop,
+     get_endpoint_ids,
+     create_stream,
+     release_stream,
+diff --git a/dlls/winealsa.drv/alsa.c b/dlls/winealsa.drv/alsa.c
+index 554760415fc..6c5c2a53109 100644
+--- a/dlls/winealsa.drv/alsa.c
++++ b/dlls/winealsa.drv/alsa.c
+@@ -532,13 +532,6 @@ static NTSTATUS alsa_process_attach(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
+-static NTSTATUS alsa_main_loop(void *args)
+-{
+-    struct main_loop_params *params = args;
+-    NtSetEvent(params->event, NULL);
+-    return STATUS_SUCCESS;
+-}
+-
+ static NTSTATUS alsa_get_endpoint_ids(void *args)
+ {
+     static const WCHAR defaultW[] = {'d','e','f','a','u','l','t',0};
+@@ -2669,7 +2662,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+ {
+     alsa_process_attach,
+     alsa_not_implemented,
+-    alsa_main_loop,
++    alsa_not_implemented,
++    alsa_not_implemented,
+     alsa_get_endpoint_ids,
+     alsa_create_stream,
+     alsa_release_stream,
+@@ -2712,19 +2706,6 @@ C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == funcs_count);
+ 
+ typedef UINT PTR32;
+ 
+-static NTSTATUS alsa_wow64_main_loop(void *args)
+-{
+-    struct
+-    {
+-        PTR32 event;
+-    } *params32 = args;
+-    struct main_loop_params params =
+-    {
+-        .event = ULongToHandle(params32->event)
+-    };
+-    return alsa_main_loop(&params);
+-}
+-
+ static NTSTATUS alsa_wow64_get_endpoint_ids(void *args)
+ {
+     struct
+@@ -3126,7 +3107,8 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+ {
+     alsa_process_attach,
+     alsa_not_implemented,
+-    alsa_wow64_main_loop,
++    alsa_not_implemented,
++    alsa_not_implemented,
+     alsa_wow64_get_endpoint_ids,
+     alsa_wow64_create_stream,
+     alsa_wow64_release_stream,
+diff --git a/dlls/winecoreaudio.drv/coreaudio.c b/dlls/winecoreaudio.drv/coreaudio.c
+index da2ae2dd67b..59f6d6706ab 100644
+--- a/dlls/winecoreaudio.drv/coreaudio.c
++++ b/dlls/winecoreaudio.drv/coreaudio.c
+@@ -214,13 +214,6 @@ static NTSTATUS unix_process_attach(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
+-static NTSTATUS unix_main_loop(void *args)
+-{
+-    struct main_loop_params *params = args;
+-    NtSetEvent(params->event, NULL);
+-    return STATUS_SUCCESS;
+-}
+-
+ static NTSTATUS unix_get_endpoint_ids(void *args)
+ {
+     struct get_endpoint_ids_params *params = args;
+@@ -1782,7 +1775,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+ {
+     unix_process_attach,
+     unix_not_implemented,
+-    unix_main_loop,
++    unix_not_implemented,
++    unix_not_implemented,
+     unix_get_endpoint_ids,
+     unix_create_stream,
+     unix_release_stream,
+@@ -1825,19 +1819,6 @@ C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == funcs_count);
+ 
+ typedef UINT PTR32;
+ 
+-static NTSTATUS unix_wow64_main_loop(void *args)
+-{
+-    struct
+-    {
+-        PTR32 event;
+-    } *params32 = args;
+-    struct main_loop_params params =
+-    {
+-        .event = ULongToHandle(params32->event)
+-    };
+-    return unix_main_loop(&params);
+-}
+-
+ static NTSTATUS unix_wow64_get_endpoint_ids(void *args)
+ {
+     struct
+@@ -2238,7 +2219,8 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+ {
+     unix_process_attach,
+     unix_not_implemented,
+-    unix_wow64_main_loop,
++    unix_not_implemented,
++    unix_not_implemented,
+     unix_wow64_get_endpoint_ids,
+     unix_wow64_create_stream,
+     unix_wow64_release_stream,
+diff --git a/dlls/wineoss.drv/oss.c b/dlls/wineoss.drv/oss.c
+index bcdcc72ba0a..132ee577d90 100644
+--- a/dlls/wineoss.drv/oss.c
++++ b/dlls/wineoss.drv/oss.c
+@@ -237,13 +237,6 @@ static NTSTATUS oss_process_attach(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
+-static NTSTATUS oss_main_loop(void *args)
+-{
+-    struct main_loop_params *params = args;
+-    NtSetEvent(params->event, NULL);
+-    return STATUS_SUCCESS;
+-}
+-
+ static NTSTATUS oss_get_endpoint_ids(void *args)
+ {
+     struct get_endpoint_ids_params *params = args;
+@@ -1639,7 +1632,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+ {
+     oss_process_attach,
+     oss_not_implemented,
+-    oss_main_loop,
++    oss_not_implemented,
++    oss_not_implemented,
+     oss_get_endpoint_ids,
+     oss_create_stream,
+     oss_release_stream,
+@@ -1698,19 +1692,6 @@ static NTSTATUS oss_wow64_test_connect(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
+-static NTSTATUS oss_wow64_main_loop(void *args)
+-{
+-    struct
+-    {
+-        PTR32 event;
+-    } *params32 = args;
+-    struct main_loop_params params =
+-    {
+-        .event = ULongToHandle(params32->event)
+-    };
+-    return oss_main_loop(&params);
+-}
+-
+ static NTSTATUS oss_wow64_get_endpoint_ids(void *args)
+ {
+     struct
+@@ -2135,7 +2116,8 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+ {
+     oss_process_attach,
+     oss_not_implemented,
+-    oss_wow64_main_loop,
++    oss_not_implemented,
++    oss_not_implemented,
+     oss_wow64_get_endpoint_ids,
+     oss_wow64_create_stream,
+     oss_wow64_release_stream,
+diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
+index 926ee6c4c7b..77f0a9b4a8c 100644
+--- a/dlls/winepulse.drv/pulse.c
++++ b/dlls/winepulse.drv/pulse.c
+@@ -317,19 +317,47 @@ static void pulse_main_loop_thread_cleanup(void *context)
+     pulse_broadcast();
+ }
+ 
+-static NTSTATUS pulse_main_loop(void *args)
++static void pulse_main_loop(void *args)
+ {
+-    struct main_loop_params *params = args;
++    HANDLE event = args;
+     int ret;
+     pulse_lock();
+     pulse_ml = pa_mainloop_new();
+     pa_mainloop_set_poll_func(pulse_ml, pulse_poll_func, NULL);
+-    NtSetEvent(params->event, NULL);
++    NtSetEvent(event, NULL);
+     pthread_cleanup_push(pulse_main_loop_thread_cleanup, NULL);
+     pa_mainloop_run(pulse_ml, &ret);
+     pthread_cleanup_pop(0);
+     pa_mainloop_free(pulse_ml);
+     pulse_unlock();
++    PsTerminateSystemThread( 0 );
++}
++
++static HANDLE main_loop_thread;
++
++static NTSTATUS pulse_main_loop_start(void *args)
++{
++    static const WCHAR name[] = {'a','u','d','i','o','_','c','l','i','e','n','t','_','m','a','i','n',0};
++    HANDLE event;
++    NTSTATUS status;
++
++    if (main_loop_thread) return STATUS_SUCCESS;
++
++    NtCreateEvent( &event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE );
++    if (!(status = create_unix_thread( &main_loop_thread, name, pulse_main_loop, event )))
++        NtWaitForSingleObject( event, FALSE, NULL );
++    NtClose( event );
++    return status;
++}
++
++static NTSTATUS pulse_main_loop_stop(void *args)
++{
++    if (main_loop_thread)
++    {
++        NtWaitForSingleObject( main_loop_thread, FALSE, NULL );
++        NtClose( main_loop_thread );
++        main_loop_thread = 0;
++    }
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -2760,7 +2788,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+ {
+     pulse_process_attach,
+     pulse_process_detach,
+-    pulse_main_loop,
++    pulse_main_loop_start,
++    pulse_main_loop_stop,
+     pulse_get_endpoint_ids,
+     pulse_create_stream,
+     pulse_release_stream,
+@@ -2803,19 +2832,6 @@ C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == funcs_count);
+ 
+ typedef UINT PTR32;
+ 
+-static NTSTATUS pulse_wow64_main_loop(void *args)
+-{
+-    struct
+-    {
+-        PTR32 event;
+-    } *params32 = args;
+-    struct main_loop_params params =
+-    {
+-        .event = ULongToHandle(params32->event)
+-    };
+-    return pulse_main_loop(&params);
+-}
+-
+ static NTSTATUS pulse_wow64_get_endpoint_ids(void *args)
+ {
+     struct
+@@ -3258,7 +3274,8 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+ {
+     pulse_process_attach,
+     pulse_process_detach,
+-    pulse_wow64_main_loop,
++    pulse_main_loop_start,
++    pulse_main_loop_stop,
+     pulse_wow64_get_endpoint_ids,
+     pulse_wow64_create_stream,
+     pulse_wow64_release_stream,
+-- 
+2.55.0
+

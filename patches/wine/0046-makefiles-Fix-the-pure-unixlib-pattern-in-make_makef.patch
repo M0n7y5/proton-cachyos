@@ -1,0 +1,26 @@
+From 3074c8d3446dffdf07001322a4bf2995193fa3ee Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Mon, 6 Jul 2026 20:28:46 +0200
+Subject: [PATCH 046/162] makefiles: Fix the pure unixlib pattern in
+ make_makefiles.
+
+---
+ tools/make_makefiles | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/make_makefiles b/tools/make_makefiles
+index f20056dfe74..fc8f3bb3a6d 100755
+--- a/tools/make_makefiles
++++ b/tools/make_makefiles
+@@ -365,7 +365,7 @@ sub update_makefiles(@)
+         }
+         elsif (defined($make{"UNIXLIB"}))
+         {
+-            die "UNIXLIB should not be defined in $file" unless $file =~ /^dlls\/.*\.drv\/Makefile.kin$/;
++            die "UNIXLIB should not be defined in $file" unless $file =~ /^dlls\/.*\.drv\/Makefile\.in$/;
+         }
+         push @lines, "WINE_CONFIG_MAKEFILE($dir)\n";
+     }
+-- 
+2.55.0
+

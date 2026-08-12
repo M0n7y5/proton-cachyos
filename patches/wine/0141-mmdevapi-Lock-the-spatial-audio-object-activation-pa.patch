@@ -1,0 +1,113 @@
+From fa4929c3f11aaf60f226183b48fdd44742eb5c56 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 19:31:57 +0200
+Subject: [PATCH 141/162] mmdevapi: Lock the spatial audio object activation
+ path.
+
+---
+ dlls/mmdevapi/spatialaudio.c | 67 ++++++++++++++++++++++--------------
+ 1 file changed, 42 insertions(+), 25 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 59d76a5f9ae..23f165f9a3c 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -882,31 +882,21 @@ static HRESULT WINAPI SAORS_ActivateSpatialAudioObject(ISpatialAudioObjectRender
+ {
+     SpatialAudioStreamImpl *This = impl_from_ISpatialAudioObjectRenderStream(iface);
+     SpatialAudioObjectImpl *obj;
++    HRESULT hr = S_OK;
+ 
+     TRACE("(%p)->(0x%x, %p)\n", This, type, object);
+ 
+-    if(type == AudioObjectType_Dynamic){
+-        if(This->dyn_live >= This->dyn_max){
+-            WARN("No dynamic object slots available (%u live, %u max, spatial sound %s).\n",
+-                    This->dyn_live, This->dyn_max, This->sa_client->dyn_budget ? "on" : "off");
+-            return SPTLAUDCLNT_E_NO_MORE_OBJECTS;
+-        }
+-    }else if(type & ~This->params.StaticObjectTypeMask){
+-        return SPTLAUDCLNT_E_STATIC_OBJECT_NOT_AVAILABLE;
+-    }else if(type != AudioObjectType_None){
+-        UINT32 idx = AudioObjectType_to_index(type);
+-
+-        /* StaticObjectTypeMask is app-supplied and unfiltered, so it can admit
+-         * a type that maps to no bed channel */
+-        if(idx == ~0)
+-            return SPTLAUDCLNT_E_STATIC_OBJECT_NOT_AVAILABLE;
+-        LIST_FOR_EACH_ENTRY(obj, &This->objects, SpatialAudioObjectImpl, entry){
+-            if(obj->static_idx == idx)
+-                return SPTLAUDCLNT_E_OBJECT_ALREADY_ACTIVE;
+-        }
++    /* Allocated before the lock so the critical section stays short. The
++     * admission tests below have to run inside it: dyn_live and the object
++     * list are both mutated by SAO_Release, so reading them outside races a
++     * concurrent release of a sibling object. */
++    if(!(obj = calloc(1, sizeof(*obj))))
++        return E_OUTOFMEMORY;
++    if(!(obj->buf = calloc(This->period_frames,
++            This->sa_client->object_fmtex.Format.nBlockAlign))){
++        free(obj);
++        return E_OUTOFMEMORY;
+     }
+-
+-    obj = calloc(1, sizeof(*obj));
+     obj->ISpatialAudioObject_iface.lpVtbl = &ISpatialAudioObject_vtbl;
+     obj->ref = 1;
+     obj->type = type;
+@@ -918,14 +908,40 @@ static HRESULT WINAPI SAORS_ActivateSpatialAudioObject(ISpatialAudioObjectRender
+     }else{
+         obj->static_idx = AudioObjectType_to_index(type);
+     }
+-
+     obj->sa_stream = This;
+-    SAORS_AddRef(&This->ISpatialAudioObjectRenderStream_iface);
+-
+-    obj->buf = calloc(This->period_frames, This->sa_client->object_fmtex.Format.nBlockAlign);
+ 
+     EnterCriticalSection(&This->lock);
+ 
++    if(type == AudioObjectType_Dynamic){
++        if(This->dyn_live >= This->dyn_max){
++            WARN("No dynamic object slots available (%u live, %u max, spatial sound %s).\n",
++                    This->dyn_live, This->dyn_max, This->sa_client->dyn_budget ? "on" : "off");
++            hr = SPTLAUDCLNT_E_NO_MORE_OBJECTS;
++        }
++    }else if(type & ~This->params.StaticObjectTypeMask){
++        hr = SPTLAUDCLNT_E_STATIC_OBJECT_NOT_AVAILABLE;
++    }else if(type != AudioObjectType_None){
++        SpatialAudioObjectImpl *other;
++
++        /* StaticObjectTypeMask is app-supplied and unfiltered, so it can admit
++         * a type that maps to no bed channel */
++        if(obj->static_idx == ~0)
++            hr = SPTLAUDCLNT_E_STATIC_OBJECT_NOT_AVAILABLE;
++        else LIST_FOR_EACH_ENTRY(other, &This->objects, SpatialAudioObjectImpl, entry){
++            if(other->static_idx == obj->static_idx){
++                hr = SPTLAUDCLNT_E_OBJECT_ALREADY_ACTIVE;
++                break;
++            }
++        }
++    }
++
++    if(FAILED(hr)){
++        LeaveCriticalSection(&This->lock);
++        free(obj->buf);
++        free(obj);
++        return hr;
++    }
++
+     if(type == AudioObjectType_Dynamic){
+         This->dyn_live++;
+         if(This->engine){
+@@ -947,6 +963,7 @@ static HRESULT WINAPI SAORS_ActivateSpatialAudioObject(ISpatialAudioObjectRender
+         }
+     }
+     list_add_tail(&This->objects, &obj->entry);
++    SAORS_AddRef(&This->ISpatialAudioObjectRenderStream_iface);
+ 
+     LeaveCriticalSection(&This->lock);
+ 
+-- 
+2.55.0
+

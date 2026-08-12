@@ -1,0 +1,702 @@
+From 7b06695ebb8cbca412a80ee5d84e4fd380dacbe0 Mon Sep 17 00:00:00 2001
+From: Alexandre Julliard <julliard@winehq.org>
+Date: Fri, 15 May 2026 11:48:59 +0200
+Subject: [PATCH 010/162] mmdevapi: Use a system thread for the audio driver
+ timer loop thread.
+
+Adapted for the fork's winepulse: the no-op timer loop is deleted and no timer thread is created, streams are processed from the PulseAudio main loop.
+
+(partially picked from commit 4c3dd4e1d0e173e6be703ce3f05d123c0c476b1f)
+---
+ dlls/mmdevapi/client.c             |  33 +------
+ dlls/mmdevapi/mmdevapi_private.h   |   2 -
+ dlls/mmdevapi/unixlib.h            |   7 --
+ dlls/winealsa.drv/alsa.c           |  86 +++++++++---------
+ dlls/winecoreaudio.drv/coreaudio.c |  68 +++++++-------
+ dlls/wineoss.drv/oss.c             | 138 ++++++++++++++---------------
+ dlls/winepulse.drv/pulse.c         |  16 +---
+ 7 files changed, 145 insertions(+), 205 deletions(-)
+
+diff --git a/dlls/mmdevapi/client.c b/dlls/mmdevapi/client.c
+index 1c930d932a7..e04baa79ea6 100644
+--- a/dlls/mmdevapi/client.c
++++ b/dlls/mmdevapi/client.c
+@@ -200,27 +200,11 @@ static void dump_fmt(const WAVEFORMATEX *fmt)
+     }
+ }
+ 
+-static DWORD CALLBACK timer_loop_func(void *user)
+-{
+-    struct timer_loop_params params;
+-    struct audio_client *This = user;
+-
+-    SetThreadDescription(GetCurrentThread(), L"audio_client_timer");
+-
+-    params.stream = This->stream;
+-
+-    wine_unix_call(timer_loop, &params);
+-
+-    return 0;
+-}
+-
+-HRESULT stream_release(stream_handle stream, HANDLE timer_thread)
++static HRESULT stream_release(stream_handle stream)
+ {
+     struct release_stream_params params;
+ 
+-    params.stream       = stream;
+-    params.timer_thread = timer_thread;
+-
++    params.stream = stream;
+     wine_unix_call(release_stream, &params);
+ 
+     return params.result;
+@@ -562,7 +546,7 @@ static HRESULT stream_init(struct audio_client *client, const BOOLEAN force_def_
+ 
+ exit:
+     if (FAILED(params.result)) {
+-        stream_release(stream, NULL);
++        stream_release(stream);
+         free(client->vols);
+         client->vols = NULL;
+     } else {
+@@ -750,7 +734,7 @@ static ULONG WINAPI client_Release(IAudioClient3 *iface)
+         free(This->vols);
+ 
+         if (This->stream)
+-            stream_release(This->stream, This->timer_thread);
++            stream_release(This->stream);
+ 
+         free(This->device_name);
+         free(This);
+@@ -944,15 +928,6 @@ static HRESULT WINAPI client_Start(IAudioClient3 *iface)
+     params.stream = This->stream;
+     wine_unix_call(start, &params);
+ 
+-    if (SUCCEEDED(params.result) && !This->timer_thread) {
+-        if ((This->timer_thread = CreateThread(NULL, 0, timer_loop_func, This, 0, NULL)))
+-            SetThreadPriority(This->timer_thread, THREAD_PRIORITY_TIME_CRITICAL);
+-        else {
+-            IAudioClient3_Stop(&This->IAudioClient3_iface);
+-            params.result = E_FAIL;
+-        }
+-    }
+-
+     sessions_unlock();
+ 
+     return params.result;
+diff --git a/dlls/mmdevapi/mmdevapi_private.h b/dlls/mmdevapi/mmdevapi_private.h
+index 6df38b7f8a7..c16cd207fbf 100644
+--- a/dlls/mmdevapi/mmdevapi_private.h
++++ b/dlls/mmdevapi/mmdevapi_private.h
+@@ -75,8 +75,6 @@ struct audio_client {
+     UINT32 channel_count;
+     stream_handle stream;
+ 
+-    HANDLE timer_thread;
+-
+     struct audio_session *session;
+     struct audio_session_wrapper *session_wrapper;
+ 
+diff --git a/dlls/mmdevapi/unixlib.h b/dlls/mmdevapi/unixlib.h
+index c46a4ff4e98..ddb6bd1005a 100644
+--- a/dlls/mmdevapi/unixlib.h
++++ b/dlls/mmdevapi/unixlib.h
+@@ -83,7 +83,6 @@ struct create_stream_params
+ struct release_stream_params
+ {
+     stream_handle stream;
+-    HANDLE timer_thread;
+     HRESULT result;
+ };
+ 
+@@ -105,11 +104,6 @@ struct reset_params
+     HRESULT result;
+ };
+ 
+-struct timer_loop_params
+-{
+-    stream_handle stream;
+-};
+-
+ struct get_render_buffer_params
+ {
+     stream_handle stream;
+@@ -337,7 +331,6 @@ enum unix_funcs
+     start,
+     stop,
+     reset,
+-    timer_loop,
+     get_render_buffer,
+     release_render_buffer,
+     get_capture_buffer,
+diff --git a/dlls/winealsa.drv/alsa.c b/dlls/winealsa.drv/alsa.c
+index 6c5c2a53109..456380fc51b 100644
+--- a/dlls/winealsa.drv/alsa.c
++++ b/dlls/winealsa.drv/alsa.c
+@@ -95,6 +95,7 @@ struct alsa_stream
+     AUDCLNT_SHAREMODE share;
+     EDataFlow flow;
+     HANDLE event;
++    HANDLE timer_thread;
+ 
+     BOOL need_remapping;
+     int alsa_channels;
+@@ -1228,10 +1229,10 @@ static NTSTATUS alsa_release_stream(void *args)
+     struct alsa_stream *stream = handle_get_stream(params->stream);
+     SIZE_T size;
+ 
+-    if(params->timer_thread){
++    if(stream->timer_thread){
+         stream->please_quit = TRUE;
+-        NtWaitForSingleObject(params->timer_thread, FALSE, NULL);
+-        NtClose(params->timer_thread);
++        NtWaitForSingleObject(stream->timer_thread, FALSE, NULL);
++        NtClose(stream->timer_thread);
+     }
+ 
+     snd_pcm_drop(stream->pcm_handle);
+@@ -1752,10 +1753,46 @@ static int alsa_rewind_best_effort(struct alsa_stream *stream)
+     return len;
+ }
+ 
++static void alsa_timer_loop(void *args)
++{
++    struct alsa_stream *stream = args;
++    LARGE_INTEGER delay, next;
++    int adjust;
++
++    alsa_lock(stream);
++
++    delay.QuadPart = -stream->mmdev_period_rt;
++    NtQueryPerformanceCounter(&stream->last_period_time, NULL);
++    next.QuadPart = stream->last_period_time.QuadPart + stream->mmdev_period_rt;
++
++    while(!stream->please_quit){
++        if(stream->flow == eRender)
++            alsa_write_data(stream);
++        else if(stream->flow == eCapture)
++            alsa_read_data(stream);
++        alsa_unlock(stream);
++
++        NtDelayExecution(FALSE, &delay);
++
++        alsa_lock(stream);
++        NtQueryPerformanceCounter(&stream->last_period_time, NULL);
++        adjust = next.QuadPart - stream->last_period_time.QuadPart;
++        if(adjust > stream->mmdev_period_rt / 2)
++            adjust = stream->mmdev_period_rt / 2;
++        else if(adjust < -stream->mmdev_period_rt / 2)
++            adjust = -stream->mmdev_period_rt / 2;
++        delay.QuadPart = -(stream->mmdev_period_rt + adjust);
++        next.QuadPart += stream->mmdev_period_rt;
++    }
++
++    alsa_unlock(stream);
++}
++
+ static NTSTATUS alsa_start(void *args)
+ {
+     struct start_params *params = args;
+     struct alsa_stream *stream = handle_get_stream(params->stream);
++    static const WCHAR name[] = {'a','u','d','i','o','_','c','l','i','e','n','t','_','t','i','m','e','r',0};
+ 
+     alsa_lock(stream);
+ 
+@@ -1793,6 +1830,7 @@ static NTSTATUS alsa_start(void *args)
+             stream->data_in_alsa_frames = 0;
+         }
+     }
++    if (!stream->timer_thread) create_unix_thread( &stream->timer_thread, name, alsa_timer_loop, stream );
+     stream->started = TRUE;
+ 
+     return alsa_unlock_result(stream, &params->result, S_OK);
+@@ -1851,44 +1889,6 @@ static NTSTATUS alsa_reset(void *args)
+     return alsa_unlock_result(stream, &params->result, S_OK);
+ }
+ 
+-static NTSTATUS alsa_timer_loop(void *args)
+-{
+-    struct timer_loop_params *params = args;
+-    struct alsa_stream *stream = handle_get_stream(params->stream);
+-    LARGE_INTEGER delay, next;
+-    int adjust;
+-
+-    alsa_lock(stream);
+-
+-    delay.QuadPart = -stream->mmdev_period_rt;
+-    NtQueryPerformanceCounter(&stream->last_period_time, NULL);
+-    next.QuadPart = stream->last_period_time.QuadPart + stream->mmdev_period_rt;
+-
+-    while(!stream->please_quit){
+-        if(stream->flow == eRender)
+-            alsa_write_data(stream);
+-        else if(stream->flow == eCapture)
+-            alsa_read_data(stream);
+-        alsa_unlock(stream);
+-
+-        NtDelayExecution(FALSE, &delay);
+-
+-        alsa_lock(stream);
+-        NtQueryPerformanceCounter(&stream->last_period_time, NULL);
+-        adjust = next.QuadPart - stream->last_period_time.QuadPart;
+-        if(adjust > stream->mmdev_period_rt / 2)
+-            adjust = stream->mmdev_period_rt / 2;
+-        else if(adjust < -stream->mmdev_period_rt / 2)
+-            adjust = -stream->mmdev_period_rt / 2;
+-        delay.QuadPart = -(stream->mmdev_period_rt + adjust);
+-        next.QuadPart += stream->mmdev_period_rt;
+-    }
+-
+-    alsa_unlock(stream);
+-
+-    return STATUS_SUCCESS;
+-}
+-
+ static NTSTATUS alsa_get_render_buffer(void *args)
+ {
+     struct get_render_buffer_params *params = args;
+@@ -2670,7 +2670,6 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+     alsa_start,
+     alsa_stop,
+     alsa_reset,
+-    alsa_timer_loop,
+     alsa_get_render_buffer,
+     alsa_release_render_buffer,
+     alsa_get_capture_buffer,
+@@ -2770,13 +2769,11 @@ static NTSTATUS alsa_wow64_release_stream(void *args)
+     struct
+     {
+         stream_handle stream;
+-        PTR32 timer_thread;
+         HRESULT result;
+     } *params32 = args;
+     struct release_stream_params params =
+     {
+         .stream = params32->stream,
+-        .timer_thread = ULongToHandle(params32->timer_thread)
+     };
+     alsa_release_stream(&params);
+     params32->result = params.result;
+@@ -3115,7 +3112,6 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+     alsa_start,
+     alsa_stop,
+     alsa_reset,
+-    alsa_timer_loop,
+     alsa_wow64_get_render_buffer,
+     alsa_release_render_buffer,
+     alsa_wow64_get_capture_buffer,
+diff --git a/dlls/winecoreaudio.drv/coreaudio.c b/dlls/winecoreaudio.drv/coreaudio.c
+index 59f6d6706ab..75c3c8c7c3f 100644
+--- a/dlls/winecoreaudio.drv/coreaudio.c
++++ b/dlls/winecoreaudio.drv/coreaudio.c
+@@ -88,6 +88,7 @@ struct coreaudio_stream
+     DWORD flags;
+     AUDCLNT_SHAREMODE share;
+     HANDLE event;
++    HANDLE timer_thread;
+ 
+     BOOL playing, please_quit;
+     REFERENCE_TIME period;
+@@ -818,10 +819,10 @@ static NTSTATUS unix_release_stream( void *args )
+     struct coreaudio_stream *stream = handle_get_stream(params->stream);
+     SIZE_T size;
+ 
+-    if(params->timer_thread){
++    if(stream->timer_thread){
+         stream->please_quit = TRUE;
+-        NtWaitForSingleObject(params->timer_thread, FALSE, NULL);
+-        NtClose(params->timer_thread);
++        NtWaitForSingleObject(stream->timer_thread, FALSE, NULL);
++        NtClose(stream->timer_thread);
+     }
+ 
+     if(stream->unit){
+@@ -1349,10 +1350,37 @@ static NTSTATUS unix_get_current_padding(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
++static void unix_timer_loop(void *args)
++{
++    struct coreaudio_stream *stream = args;
++    LARGE_INTEGER delay, next, last;
++    int adjust;
++
++    delay.QuadPart = -stream->period;
++    NtQueryPerformanceCounter(&last, NULL);
++    next.QuadPart = last.QuadPart + stream->period;
++
++    while(!stream->please_quit){
++        NtSetEvent(stream->event, NULL);
++        NtDelayExecution(FALSE, &delay);
++        NtQueryPerformanceCounter(&last, NULL);
++
++        adjust = next.QuadPart - last.QuadPart;
++        if(adjust > stream->period / 2)
++            adjust = stream->period / 2;
++        else if(adjust < -stream->period / 2)
++            adjust = -stream->period / 2;
++
++        delay.QuadPart = -(stream->period + adjust);
++        next.QuadPart += stream->period;
++    }
++}
++
+ static NTSTATUS unix_start(void *args)
+ {
+     struct start_params *params = args;
+     struct coreaudio_stream *stream = handle_get_stream(params->stream);
++    static const WCHAR name[] = {'a','u','d','i','o','_','c','l','i','e','n','t','_','t','i','m','e','r',0};
+ 
+     os_unfair_lock_lock(&stream->lock);
+ 
+@@ -1366,6 +1394,7 @@ static NTSTATUS unix_start(void *args)
+     }
+ 
+     os_unfair_lock_unlock(&stream->lock);
++    if (!stream->timer_thread) create_unix_thread( &stream->timer_thread, name, unix_timer_loop, stream );
+ 
+     return STATUS_SUCCESS;
+ }
+@@ -1417,35 +1446,6 @@ static NTSTATUS unix_reset(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
+-static NTSTATUS unix_timer_loop(void *args)
+-{
+-    struct timer_loop_params *params = args;
+-    struct coreaudio_stream *stream = handle_get_stream(params->stream);
+-    LARGE_INTEGER delay, next, last;
+-    int adjust;
+-
+-    delay.QuadPart = -stream->period;
+-    NtQueryPerformanceCounter(&last, NULL);
+-    next.QuadPart = last.QuadPart + stream->period;
+-
+-    while(!stream->please_quit){
+-        NtSetEvent(stream->event, NULL);
+-        NtDelayExecution(FALSE, &delay);
+-        NtQueryPerformanceCounter(&last, NULL);
+-
+-        adjust = next.QuadPart - last.QuadPart;
+-        if(adjust > stream->period / 2)
+-            adjust = stream->period / 2;
+-        else if(adjust < -stream->period / 2)
+-            adjust = -stream->period / 2;
+-
+-        delay.QuadPart = -(stream->period + adjust);
+-        next.QuadPart += stream->period;
+-    }
+-
+-    return STATUS_SUCCESS;
+-}
+-
+ static NTSTATUS unix_get_render_buffer(void *args)
+ {
+     struct get_render_buffer_params *params = args;
+@@ -1783,7 +1783,6 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+     unix_start,
+     unix_stop,
+     unix_reset,
+-    unix_timer_loop,
+     unix_get_render_buffer,
+     unix_release_render_buffer,
+     unix_get_capture_buffer,
+@@ -1883,13 +1882,11 @@ static NTSTATUS unix_wow64_release_stream(void *args)
+     struct
+     {
+         stream_handle stream;
+-        PTR32 timer_thread;
+         HRESULT result;
+     } *params32 = args;
+     struct release_stream_params params =
+     {
+         .stream = params32->stream,
+-        .timer_thread = ULongToHandle(params32->timer_thread)
+     };
+     unix_release_stream(&params);
+     params32->result = params.result;
+@@ -2227,7 +2224,6 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+     unix_start,
+     unix_stop,
+     unix_reset,
+-    unix_timer_loop,
+     unix_wow64_get_render_buffer,
+     unix_release_render_buffer,
+     unix_wow64_get_capture_buffer,
+diff --git a/dlls/wineoss.drv/oss.c b/dlls/wineoss.drv/oss.c
+index 132ee577d90..9ef4ef826d2 100644
+--- a/dlls/wineoss.drv/oss.c
++++ b/dlls/wineoss.drv/oss.c
+@@ -52,6 +52,7 @@ struct oss_stream
+     UINT flags;
+     AUDCLNT_SHAREMODE share;
+     HANDLE event;
++    HANDLE timer_thread;
+ 
+     int fd;
+ 
+@@ -630,10 +631,10 @@ static NTSTATUS oss_release_stream(void *args)
+     struct oss_stream *stream = handle_get_stream(params->stream);
+     SIZE_T size;
+ 
+-    if(params->timer_thread){
++    if(stream->timer_thread){
+         stream->please_quit = TRUE;
+-        NtWaitForSingleObject(params->timer_thread, FALSE, NULL);
+-        NtClose(params->timer_thread);
++        NtWaitForSingleObject(stream->timer_thread, FALSE, NULL);
++        NtClose(stream->timer_thread);
+     }
+ 
+     close(stream->fd);
+@@ -653,66 +654,6 @@ static NTSTATUS oss_release_stream(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
+-static NTSTATUS oss_start(void *args)
+-{
+-    struct start_params *params = args;
+-    struct oss_stream *stream = handle_get_stream(params->stream);
+-
+-    oss_lock(stream);
+-
+-    if((stream->flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) && !stream->event)
+-        return oss_unlock_result(stream, &params->result, AUDCLNT_E_EVENTHANDLE_NOT_SET);
+-
+-    if(stream->playing)
+-        return oss_unlock_result(stream, &params->result, AUDCLNT_E_NOT_STOPPED);
+-
+-    stream->playing = TRUE;
+-
+-    return oss_unlock_result(stream, &params->result, S_OK);
+-}
+-
+-static NTSTATUS oss_stop(void *args)
+-{
+-    struct stop_params *params = args;
+-    struct oss_stream *stream = handle_get_stream(params->stream);
+-
+-    oss_lock(stream);
+-
+-    if(!stream->playing)
+-        return oss_unlock_result(stream, &params->result, S_FALSE);
+-
+-    stream->playing = FALSE;
+-    stream->in_oss_frames = 0;
+-
+-    return oss_unlock_result(stream, &params->result, S_OK);
+-}
+-
+-static NTSTATUS oss_reset(void *args)
+-{
+-    struct reset_params *params = args;
+-    struct oss_stream *stream = handle_get_stream(params->stream);
+-
+-    oss_lock(stream);
+-
+-    if(stream->playing)
+-        return oss_unlock_result(stream, &params->result, AUDCLNT_E_NOT_STOPPED);
+-
+-    if(stream->getbuf_last)
+-        return oss_unlock_result(stream, &params->result, AUDCLNT_E_BUFFER_OPERATION_PENDING);
+-
+-    if(stream->flow == eRender){
+-        stream->written_frames = 0;
+-        stream->last_pos_frames = 0;
+-    }else{
+-        stream->written_frames += stream->held_frames;
+-    }
+-    stream->held_frames = 0;
+-    stream->lcl_offs_frames = 0;
+-    stream->in_oss_frames = 0;
+-
+-    return oss_unlock_result(stream, &params->result, S_OK);
+-}
+-
+ static void silence_buffer(struct oss_stream *stream, BYTE *buffer, UINT32 frames)
+ {
+     WAVEFORMATEXTENSIBLE *fmtex = (WAVEFORMATEXTENSIBLE*)stream->fmt;
+@@ -860,10 +801,9 @@ static void oss_read_data(struct oss_stream *stream)
+     }
+ }
+ 
+-static NTSTATUS oss_timer_loop(void *args)
++static void oss_timer_loop(void *args)
+ {
+-    struct timer_loop_params *params = args;
+-    struct oss_stream *stream = handle_get_stream(params->stream);
++    struct oss_stream *stream = args;
+     LARGE_INTEGER delay, now, next;
+     int adjust;
+ 
+@@ -898,8 +838,68 @@ static NTSTATUS oss_timer_loop(void *args)
+     }
+ 
+     oss_unlock(stream);
++}
+ 
+-    return STATUS_SUCCESS;
++static NTSTATUS oss_start(void *args)
++{
++    struct start_params *params = args;
++    struct oss_stream *stream = handle_get_stream(params->stream);
++    static const WCHAR name[] = {'a','u','d','i','o','_','c','l','i','e','n','t','_','t','i','m','e','r',0};
++
++    oss_lock(stream);
++
++    if((stream->flags & AUDCLNT_STREAMFLAGS_EVENTCALLBACK) && !stream->event)
++        return oss_unlock_result(stream, &params->result, AUDCLNT_E_EVENTHANDLE_NOT_SET);
++
++    if(stream->playing)
++        return oss_unlock_result(stream, &params->result, AUDCLNT_E_NOT_STOPPED);
++
++    stream->playing = TRUE;
++    if (!stream->timer_thread) create_unix_thread( &stream->timer_thread, name, oss_timer_loop, stream );
++
++    return oss_unlock_result(stream, &params->result, S_OK);
++}
++
++static NTSTATUS oss_stop(void *args)
++{
++    struct stop_params *params = args;
++    struct oss_stream *stream = handle_get_stream(params->stream);
++
++    oss_lock(stream);
++
++    if(!stream->playing)
++        return oss_unlock_result(stream, &params->result, S_FALSE);
++
++    stream->playing = FALSE;
++    stream->in_oss_frames = 0;
++
++    return oss_unlock_result(stream, &params->result, S_OK);
++}
++
++static NTSTATUS oss_reset(void *args)
++{
++    struct reset_params *params = args;
++    struct oss_stream *stream = handle_get_stream(params->stream);
++
++    oss_lock(stream);
++
++    if(stream->playing)
++        return oss_unlock_result(stream, &params->result, AUDCLNT_E_NOT_STOPPED);
++
++    if(stream->getbuf_last)
++        return oss_unlock_result(stream, &params->result, AUDCLNT_E_BUFFER_OPERATION_PENDING);
++
++    if(stream->flow == eRender){
++        stream->written_frames = 0;
++        stream->last_pos_frames = 0;
++    }else{
++        stream->written_frames += stream->held_frames;
++    }
++    stream->held_frames = 0;
++    stream->lcl_offs_frames = 0;
++    stream->in_oss_frames = 0;
++
++    return oss_unlock_result(stream, &params->result, S_OK);
+ }
+ 
+ static NTSTATUS oss_get_render_buffer(void *args)
+@@ -1640,7 +1640,6 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+     oss_start,
+     oss_stop,
+     oss_reset,
+-    oss_timer_loop,
+     oss_get_render_buffer,
+     oss_release_render_buffer,
+     oss_get_capture_buffer,
+@@ -1756,13 +1755,11 @@ static NTSTATUS oss_wow64_release_stream(void *args)
+     struct
+     {
+         stream_handle stream;
+-        PTR32 timer_thread;
+         HRESULT result;
+     } *params32 = args;
+     struct release_stream_params params =
+     {
+         .stream = params32->stream,
+-        .timer_thread = ULongToHandle(params32->timer_thread)
+     };
+     oss_release_stream(&params);
+     params32->result = params.result;
+@@ -2124,7 +2121,6 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+     oss_start,
+     oss_stop,
+     oss_reset,
+-    oss_timer_loop,
+     oss_wow64_get_render_buffer,
+     oss_release_render_buffer,
+     oss_wow64_get_capture_buffer,
+diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
+index 77f0a9b4a8c..79cb51b6846 100644
+--- a/dlls/winepulse.drv/pulse.c
++++ b/dlls/winepulse.drv/pulse.c
+@@ -1713,12 +1713,6 @@ static void pulse_read(struct pulse_stream *stream)
+     }
+ }
+ 
+-static NTSTATUS pulse_timer_loop(void *args)
+-{
+-    /* Stream's data are read and written from the main loop timer callback. */
+-    return STATUS_SUCCESS;
+-}
+-
+ static void pa_streams_timer_cb(pa_mainloop_api *api, pa_time_event *e, const struct timeval *tv, void *userdata)
+ {
+     pa_usec_t now = pa_rtclock_now(), next_timer, stream_time = 0;
+@@ -1884,11 +1878,6 @@ static NTSTATUS pulse_release_stream(void *args)
+     struct pulse_stream *stream = handle_get_stream(params->stream);
+     SIZE_T size;
+ 
+-    if(params->timer_thread) {
+-        NtWaitForSingleObject(params->timer_thread, FALSE, NULL);
+-        NtClose(params->timer_thread);
+-    }
+-
+     pulse_lock();
+     remove_stream_from_period(stream);
+     if (PA_STREAM_IS_GOOD(pa_stream_get_state(stream->stream))) {
+@@ -1919,6 +1908,7 @@ static NTSTATUS pulse_start(void *args)
+ {
+     struct start_params *params = args;
+     struct pulse_stream *stream = handle_get_stream(params->stream);
++    static const WCHAR name[] = {'a','u','d','i','o','_','c','l','i','e','n','t','_','t','i','m','e','r',0};
+     int success;
+ 
+     params->result = S_OK;
+@@ -2796,7 +2786,6 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+     pulse_start,
+     pulse_stop,
+     pulse_reset,
+-    pulse_timer_loop,
+     pulse_get_render_buffer,
+     pulse_release_render_buffer,
+     pulse_get_capture_buffer,
+@@ -2896,13 +2885,11 @@ static NTSTATUS pulse_wow64_release_stream(void *args)
+     struct
+     {
+         stream_handle stream;
+-        PTR32 timer_thread;
+         HRESULT result;
+     } *params32 = args;
+     struct release_stream_params params =
+     {
+         .stream = params32->stream,
+-        .timer_thread = ULongToHandle(params32->timer_thread)
+     };
+     pulse_release_stream(&params);
+     params32->result = params.result;
+@@ -3282,7 +3269,6 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+     pulse_start,
+     pulse_stop,
+     pulse_reset,
+-    pulse_timer_loop,
+     pulse_wow64_get_render_buffer,
+     pulse_release_render_buffer,
+     pulse_wow64_get_capture_buffer,
+-- 
+2.55.0
+

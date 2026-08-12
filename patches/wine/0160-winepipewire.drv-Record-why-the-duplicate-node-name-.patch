@@ -1,0 +1,34 @@
+From 2fd0c7ba97715468390c4f93a2196ea838243fc4 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Wed, 12 Aug 2026 20:15:49 +0200
+Subject: [PATCH 160/162] winepipewire.drv: Record why the duplicate node name
+ check is per direction.
+
+---
+ dlls/winepipewire.drv/pipewire.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index d9bc8728ef6..cac1357ae42 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -1374,9 +1374,13 @@ static void on_probe_registry_global(void *data, uint32_t id, uint32_t permissio
+         else
+             return;
+ 
+-        /* find_device returns the first match in a list, so a second node
+-         * with this direction and name would enumerate but never be
+-         * reachable.  Any local client can register one. */
++        /* Scoped per direction, deliberately: find_device searches the
++         * matching list first, so a sink and a source may share a name and
++         * both stay reachable, while a second node of the same direction
++         * would enumerate and never be reached.  Any local client can
++         * register one.  A source colliding with the monitor endpoint that
++         * build_device_cache synthesizes for a same-named sink is a
++         * different pairing and is not covered here. */
+         LIST_FOR_EACH_ENTRY(dup, &p->nodes, struct probe_node, entry)
+             if (dup->flow == flow && !strcmp(dup->node_name, node_name))
+                 return;
+-- 
+2.55.0
+

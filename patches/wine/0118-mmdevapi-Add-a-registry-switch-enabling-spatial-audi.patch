@@ -1,0 +1,72 @@
+From f8b5469c1a64446590bcbea9b2a8424671beeab9 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sat, 13 Jun 2026 00:26:21 +0200
+Subject: [PATCH 118/162] mmdevapi: Add a registry switch enabling spatial
+ audio dynamic objects.
+
+(cherry picked from commit 0fe2963231c6df3eff7a418237cee85bc6592103)
+---
+ dlls/mmdevapi/spatialaudio.c | 25 +++++++++++++++++++++++--
+ 1 file changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index f2e105cf942..e92a93cdb01 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -39,6 +39,24 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
+ 
++#define SPATIAL_MAX_DYNAMIC_OBJECTS 112  /* matches Windows Sonic for Headphones */
++
++static UINT get_spatial_dynamic_budget(void)
++{
++    WCHAR buf[16];
++    DWORD size = sizeof(buf);
++    HKEY key;
++    BOOL enabled = FALSE;
++
++    if(RegOpenKeyW(HKEY_CURRENT_USER, L"Software\\Wine\\mmdevapi", &key) == ERROR_SUCCESS){
++        if(RegQueryValueExW(key, L"SpatialSound", 0, NULL, (BYTE*)buf, &size) == ERROR_SUCCESS)
++            enabled = buf[0] == 'y' || buf[0] == 'Y' || buf[0] == 't' || buf[0] == 'T' || buf[0] == '1';
++        RegCloseKey(key);
++    }
++
++    return enabled ? SPATIAL_MAX_DYNAMIC_OBJECTS : 0;
++}
++
+ static UINT32 AudioObjectType_to_index(AudioObjectType type)
+ {
+     UINT32 o = 0;
+@@ -130,6 +148,7 @@ struct SpatialAudioImpl {
+     IMMDevice *mmdev;
+     LONG ref;
+     WAVEFORMATEXTENSIBLE object_fmtex;
++    UINT dyn_budget;
+ };
+ 
+ static inline SpatialAudioObjectImpl *impl_from_ISpatialAudioObject(ISpatialAudioObject *iface)
+@@ -646,9 +665,10 @@ static HRESULT WINAPI SAC_GetMaxDynamicObjectCount(ISpatialAudioClient *iface,
+         UINT32 *value)
+ {
+     SpatialAudioImpl *This = impl_from_ISpatialAudioClient(iface);
+-    FIXME("(%p)->(%p)\n", This, value);
+ 
+-    *value = 0;
++    TRACE("(%p)->(%p)\n", This, value);
++
++    *value = This->dyn_budget;
+ 
+     return S_OK;
+ }
+@@ -984,6 +1004,7 @@ HRESULT SpatialAudioClient_Create(IMMDevice *mmdev, ISpatialAudioClient **out)
+     obj->ref = 1;
+     obj->ISpatialAudioClient_iface.lpVtbl = &ISpatialAudioClient_vtbl;
+     obj->IAudioFormatEnumerator_iface.lpVtbl = &IAudioFormatEnumerator_vtbl;
++    obj->dyn_budget = get_spatial_dynamic_budget();
+ 
+     obj->object_fmtex.Format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+     obj->object_fmtex.Format.nChannels = 1;
+-- 
+2.55.0
+

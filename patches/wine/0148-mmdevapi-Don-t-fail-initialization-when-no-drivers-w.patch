@@ -1,0 +1,31 @@
+From ecdf16320820373684ec42d9b8818f6ca559a0bc Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 21:59:32 +0200
+Subject: [PATCH 148/162] mmdevapi: Don't fail initialization when no drivers
+ were loaded.
+
+Otherwise we keep trying to initialize the driver on systems without
+sound libraries.
+
+Upstream: 83a3f67db7f3a16fa6a262884657d87de1d63ef8
+Author: Piotr Caban <piotr@codeweavers.com>
+---
+ dlls/mmdevapi/main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/mmdevapi/main.c b/dlls/mmdevapi/main.c
+index 2ad42030104..7909a5e21b5 100644
+--- a/dlls/mmdevapi/main.c
++++ b/dlls/mmdevapi/main.c
+@@ -196,7 +196,7 @@ static BOOL WINAPI init_driver(INIT_ONCE *once, void *param, void **context)
+             "Maybe check dependencies with WINEDEBUG=warn+module.\n",
+             wine_dbgstr_w(driver_list));
+ 
+-    return drvs.module != 0;
++    return TRUE;
+ }
+ 
+ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+-- 
+2.55.0
+

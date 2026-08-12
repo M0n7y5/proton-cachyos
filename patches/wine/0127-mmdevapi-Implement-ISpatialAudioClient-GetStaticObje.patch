@@ -1,0 +1,43 @@
+From 57ab8d2bc772e3b072edf433f5fd663998b25d0a Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sun, 14 Jun 2026 02:14:38 +0200
+Subject: [PATCH 127/162] mmdevapi: Implement
+ ISpatialAudioClient::GetStaticObjectPosition.
+
+(cherry picked from commit aeb616ce04cbec0fe33de9136f67938154a32705)
+---
+ dlls/mmdevapi/spatialaudio.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 16655d7a483..3b4b12ed1e4 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -972,8 +972,22 @@ static HRESULT WINAPI SAC_GetStaticObjectPosition(ISpatialAudioClient *iface,
+         AudioObjectType type, float *x, float *y, float *z)
+ {
+     SpatialAudioImpl *This = impl_from_ISpatialAudioClient(iface);
+-    FIXME("(%p)->(0x%x, %p, %p, %p)\n", This, type, x, y, z);
+-    return E_NOTIMPL;
++    float pos[3];
++
++    TRACE("(%p)->(0x%x, %p, %p, %p)\n", This, type, x, y, z);
++
++    if(!This->dyn_budget)
++        return E_NOTIMPL;
++
++    /* Report the same canonical 7.1.4 directions the HRTF mixer renders each bed
++     * channel to, so a probing title reads back exactly where the channel sits;
++     * non-directional types (LFE) report the listener origin. */
++    bed_object_position(type, pos);
++    *x = pos[0];
++    *y = pos[1];
++    *z = pos[2];
++
++    return S_OK;
+ }
+ 
+ static HRESULT WINAPI SAC_GetNativeStaticObjectTypeMask(ISpatialAudioClient *iface,
+-- 
+2.55.0
+

@@ -1,0 +1,46 @@
+From 01bb47ddb0345a7d0d007652663a9b82c17817b9 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sat, 13 Jun 2026 00:58:26 +0200
+Subject: [PATCH 123/162] mmdevapi: Fall back to the default libphonon.so when
+ the override path does not load.
+
+(cherry picked from commit dfea1fa9d875173225506a69335c0b860717a4b2)
+---
+ dlls/mmdevapi/unix/spatial.c | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/mmdevapi/unix/spatial.c b/dlls/mmdevapi/unix/spatial.c
+index 05f413499e7..64a2b55dc0a 100644
+--- a/dlls/mmdevapi/unix/spatial.c
++++ b/dlls/mmdevapi/unix/spatial.c
+@@ -111,13 +111,23 @@ static void phonon_load(void)
+ {
+     const char *path = getenv("WINE_SPATIAL_PHONON");
+ 
+-    phonon_handle = dlopen(path && path[0] ? path : "libphonon.so", RTLD_NOW);
++    if (path && path[0])
++    {
++        if (!(phonon_handle = dlopen(path, RTLD_NOW)))
++            /* the override may name the wrong ELF class in a split wow64 setup */
++            WARN("Could not load %s: %s\n", path, dlerror());
++        else
++            TRACE("Loaded %s.\n", path);
++    }
+     if (!phonon_handle)
+     {
+-        WARN("Could not load %s: %s\n", path && path[0] ? path : "libphonon.so", dlerror());
+-        return;
++        if (!(phonon_handle = dlopen("libphonon.so", RTLD_NOW)))
++        {
++            WARN("Could not load libphonon.so: %s\n", dlerror());
++            return;
++        }
++        TRACE("Loaded libphonon.so.\n");
+     }
+-    TRACE("Loaded %s.\n", path && path[0] ? path : "libphonon.so");
+ 
+ #define LOAD_FUNC(f) \
+     if (!(p_##f = dlsym(phonon_handle, #f))) goto fail
+-- 
+2.55.0
+

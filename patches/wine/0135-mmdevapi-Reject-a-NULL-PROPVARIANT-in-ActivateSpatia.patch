@@ -1,0 +1,29 @@
+From 5a407b859660c04deda6ba29ee5da1ac0fc74b9e Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 18:30:33 +0200
+Subject: [PATCH 135/162] mmdevapi: Reject a NULL PROPVARIANT in
+ ActivateSpatialAudioStream.
+
+---
+ dlls/mmdevapi/spatialaudio.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index 0645cc9fec5..b4db123ee6e 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -1261,9 +1261,8 @@ static HRESULT WINAPI SAC_ActivateSpatialAudioStream(ISpatialAudioClient *iface,
+     if(IsEqualIID(riid, &IID_ISpatialAudioObjectRenderStream)){
+         SpatialAudioStreamImpl *obj;
+ 
+-        if(prop &&
+-                (prop->vt != VT_BLOB ||
+-                 prop->blob.cbSize != sizeof(SpatialAudioObjectRenderStreamActivationParams))){
++        if(!prop || prop->vt != VT_BLOB || !prop->blob.pBlobData ||
++                prop->blob.cbSize != sizeof(SpatialAudioObjectRenderStreamActivationParams)){
+             WARN("Got invalid params\n");
+             *stream = NULL;
+             return E_INVALIDARG;
+-- 
+2.55.0
+

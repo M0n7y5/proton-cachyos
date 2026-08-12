@@ -1,0 +1,72 @@
+From be413f1bb5f8e8f167cb34de069aaa966111583b Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sun, 14 Jun 2026 23:12:22 +0200
+Subject: [PATCH 130/162] mmdevapi: Tame the virtualized bed bass buildup with
+ a low-shelf.
+
+(cherry picked from commit 1a2ee4383a8b677fdbe70b967092853994b32036)
+---
+ dlls/mmdevapi/unix/spatial.c | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/dlls/mmdevapi/unix/spatial.c b/dlls/mmdevapi/unix/spatial.c
+index 5bd0d358c4c..2673f39cb5c 100644
+--- a/dlls/mmdevapi/unix/spatial.c
++++ b/dlls/mmdevapi/unix/spatial.c
+@@ -157,6 +157,10 @@ struct spatial_engine
+     IPLAudioSettings audio;
+     IPLBinauralEffect effects[SPATIAL_MAX_SLOTS];
+     float *scratch;     /* 2 * frames, deinterleaved L then R */
++    int bass_on;        /* WINE_SPATIAL_BASS one-pole low-shelf active */
++    float bass_g;       /* LF gain, 0..1 (1 = unchanged) */
++    float bass_a;       /* one-pole coefficient = 2*pi*fc/fs */
++    float lp_l, lp_r;   /* lowpass state, persists across mix calls */
+ };
+ 
+ static NTSTATUS spatial_init(void *args)
+@@ -197,6 +201,22 @@ static NTSTATUS spatial_init(void *args)
+         goto fail;
+     }
+ 
++    {
++        const char *bass = getenv("WINE_SPATIAL_BASS");
++        const char *hz = getenv("WINE_SPATIAL_BASS_HZ");
++        float fc = hz && hz[0] ? (float)atof(hz) : 250.0f;
++        float g = bass && bass[0] ? (float)atof(bass) : 0.5f; /* default-on; WINE_SPATIAL_BASS=1 disables */
++
++        if (g < 0.0f) g = 0.0f;
++        if (g > 1.0f) g = 1.0f;
++        engine->bass_g = g;
++        engine->bass_a = 2.0f * 3.14159265358979f * fc / (float)params->rate;
++        if (engine->bass_a > 1.0f) engine->bass_a = 1.0f;
++        engine->bass_on = (g < 1.0f);
++        if (engine->bass_on)
++            TRACE("bass low-shelf on: LF gain %.2f, corner %.0f Hz.\n", g, fc);
++    }
++
+     TRACE("engine %p: %u Hz, %u frames.\n", engine, params->rate, params->frames);
+     params->handle = (UINT_PTR)engine;
+     return STATUS_SUCCESS;
+@@ -320,6 +340,19 @@ static NTSTATUS spatial_mix(void *args)
+         }
+     }
+ 
++    if (engine->bass_on)
++    {
++        float a = engine->bass_a, g1 = 1.0f - engine->bass_g;
++
++        for (f = 0; f < params->frames; f++)
++        {
++            engine->lp_l += a * (out_l[f] - engine->lp_l);
++            engine->lp_r += a * (out_r[f] - engine->lp_r);
++            out_l[f] -= g1 * engine->lp_l;
++            out_r[f] -= g1 * engine->lp_r;
++        }
++    }
++
+     return STATUS_SUCCESS;
+ }
+ 
+-- 
+2.55.0
+
