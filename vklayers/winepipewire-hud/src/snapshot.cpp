@@ -279,16 +279,17 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
                                 a->out_peak_db[i]);
         else if (len > 0 && len < (int)sizeof(line))
         {
-            /* out_channels 0 has three causes and they are different diagnoses:
-             * the driver only meters render streams, the negotiated format may
-             * carry no meter at all, and a render stream with nothing queued is
-             * genuinely silent. */
+            /* Mirrors the overlay row: none of these is a measurement, and a
+             * render stream with nothing queued is not "genuinely silent", it
+             * is unmeasured.  Real silence arrives as PWHUD_DB_FLOOR on a
+             * non-zero out_channels and is printed by the branch above. */
             uint32_t flags_a = hud_snapshot_flags_a(view);
 
             len += snprintf(line + len, sizeof(line) - len, "%s",
-                            flags_a & PWHUD_F_CAPTURE     ? " peak n/a on capture"
+                            flags_a & PWHUD_F_CAPTURE        ? " peak n/a on capture"
                             : flags_a & PWHUD_F_OUT_NO_METER ? " peak unmetered"
-                                                             : " peak silent");
+                            : !a->drv_held_bytes             ? " peak no data this tick"
+                                                             : " peak unavailable");
         }
         if (hud_snapshot_flags_a(view) & PWHUD_F_OUT_TRUNCATED && len > 0 &&
             len < (int)sizeof(line))

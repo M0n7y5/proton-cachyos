@@ -73,10 +73,25 @@ static void section_a_rows(const struct hud_snapshot_view *view, uint64_t now)
     }
     else
     {
-        /* Three different diagnoses, never collapsed into "silent". */
-        ImGui::Text("peak %s", flags & PWHUD_F_CAPTURE       ? "n/a on capture"
+        /* Nothing here is a measurement, so nothing here may claim one.
+         *
+         * Genuine digital silence never reaches this branch: a scan that runs
+         * and finds only zeroes publishes PWHUD_DB_FLOOR on every channel and
+         * a non-zero out_channels, which is the row above.  The old "silent"
+         * was therefore unreachable for its stated meaning and is gone rather
+         * than reworded, and the old count of three was wrong: four unflagged
+         * conditions reach here, the driver's empty ring plus three that mean
+         * the stream is not carrying audio at all.
+         *
+         * An empty ring is worth separating because it is the only one that
+         * happens in normal running, and only for a tick: the driver takes the
+         * peak before it retires the period, so a zero here means that period
+         * really had nothing in it.  The rest share one honest word; telling
+         * them apart needs a flag bit the driver does not spend. */
+        ImGui::Text("peak %s", flags & PWHUD_F_CAPTURE        ? "n/a on capture"
                                : flags & PWHUD_F_OUT_NO_METER ? "unmetered"
-                                                              : "silent");
+                               : !a->drv_held_bytes           ? "no data this tick"
+                                                              : "unavailable");
     }
 
     if (hud_snapshot_idle(view, now))
