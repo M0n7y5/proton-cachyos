@@ -724,6 +724,18 @@ void hud_build_frame(struct swapchain_data *swapchain_data)
             hud_text(HUD_STATE_CONFIG, "ticks %.0f and %.0f, pip is a %.1f s hold",
                      (double)hud_ticks_db[0], (double)hud_ticks_db[1],
                      (double)HUD_HOLD_NS / 1e9);
+            /* A courtesy credit, not a licence obligation: Steam Audio ships no
+             * NOTICE file, so Apache-2.0 section 4(d) is not engaged, and the tool
+             * already carries the licence and the upstream third-party notices at
+             * its root.  It is gated on the engine actually running rather than on
+             * the feature existing or the bed asking for it, because in the panning
+             * fallback no sample goes through Steam Audio and a credit there would
+             * be a lying display of the same kind this component keeps removing.
+             * No version number: the layer cannot observe which libphonon loaded,
+             * and a hardcoded one would be a claim it cannot make.  Last line, so
+             * appearing and disappearing with the engine moves nothing above it. */
+            if (hud_snapshot_spatial_published(view) && view->b.sp_hrtf)
+                hud_text(HUD_STATE_CONFIG, "HRTF powered by Steam Audio");
         }
     }
 
