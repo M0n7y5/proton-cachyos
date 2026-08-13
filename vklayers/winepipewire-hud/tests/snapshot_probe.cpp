@@ -200,6 +200,23 @@ int main(void)
         hud_snapshot_log(&unpublished);
     }
 
+    /* The state between the two: section B has published, and the bed is empty.
+     * Distinct from never published and from a bed sitting at the floor, and none
+     * of the three may be rendered as the others. */
+    {
+        struct hud_snapshot_view empty_bed = {};
+
+        publish_b(pub, 0, 0);
+        hud_snapshot_sample(&empty_bed, snap);
+        check(hud_snapshot_spatial_published(&empty_bed),
+              "a published section B with no bed channels still reads as published");
+        check(empty_bed.b.sp_bed_mask == 0, "and its bed mask is empty");
+        check(empty_bed.b.sp_bed_db[0] == PWHUD_DB_FLOOR,
+              "its unused bed slots hold the floor, which is why the mask and not the "
+              "level decides what is shown");
+        hud_snapshot_log(&empty_bed);
+    }
+
     /* A file that is not a snapshot is refused rather than misparsed. */
     {
         uint32_t magic = pub.snap->magic;
