@@ -1,0 +1,33 @@
+From bd22bda12fc452671ba00894e540b9dd97669e02 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Fri, 14 Aug 2026 00:53:05 +0200
+Subject: [PATCH 176/176] winepipewire.drv: Record why the fault counters sum
+ over live streams only.
+
+---
+ dlls/winepipewire.drv/pipewire.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index f9e13e30024..ff7a8445061 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -3770,6 +3770,15 @@ static void hud_publish(const struct pipewire_period *period, const struct pw_ti
+     UINT32 under = 0, over = 0, bad = 0, resyncs = 0, count = 0, i;
+     struct pipewire_stream *stream;
+ 
++    /* Deliberately over live streams only, so these answer "how is the audio
++     * doing right now", which is the question an overlay exists to answer.  A
++     * total carrying a long-dead stream's startup underruns would be noise.
++     *
++     * The consequence, and it is chosen rather than overlooked: the published
++     * totals are NOT monotonic.  Releasing a stream removes its contribution
++     * and every one of these can fall.  A consumer must not read a decrease as
++     * a fault; an overlay once did, and reported a phantom glitch every time a
++     * title swapped streams.  Do not "fix" this into a monotonic accumulator. */
+     LIST_FOR_EACH_ENTRY(stream, &g_streams, struct pipewire_stream, entry)
+     {
+         under += __atomic_load_n(&stream->underrun_count, __ATOMIC_RELAXED);
+-- 
+2.55.0
+
