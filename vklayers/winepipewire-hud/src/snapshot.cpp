@@ -22,13 +22,16 @@ namespace {
  * limited: a process with no audio at all would otherwise pay per frame. */
 #define HUD_SNAPSHOT_RETRY_NS 1000000000ull
 
+/* Same tokens as the driver's report_dispatch_mode at pipewire.c:2917, so one grep
+ * finds the mode in the driver's log and in this one.  These were "data" and
+ * "loop", which matched neither. */
 const char *dispatch_name(uint32_t dispatch)
 {
     switch (dispatch)
     {
-    case PWHUD_DISPATCH_DATA: return "data";
-    case PWHUD_DISPATCH_LOOP: return "loop";
-    default:                  return "unknown";
+    case PWHUD_DISPATCH_DATA: return "data-thread";
+    case PWHUD_DISPATCH_LOOP: return "driver-loop";
+    default:                  return "not-latched";
     }
 }
 

@@ -98,6 +98,9 @@ static void publish_loop(struct hud_publisher *pub, std::atomic<bool> *run)
      * rendered frame reproducible, which is what lets two architectures be
      * compared byte for byte instead of by eye. */
     const bool statics = getenv("WINEPIPEWIRE_HUD_SMOKE_STATIC") != nullptr;
+    /* Tick at which drv_underruns drops from 249 to 5, or 0 to leave it alone. */
+    const char *understep_env = getenv("WINEPIPEWIRE_HUD_SMOKE_UNDERSTEP");
+    const unsigned understep = understep_env ? (unsigned)strtoul(understep_env, nullptr, 10) : 0;
 
     if (out_channels > PWHUD_OUT_MAX)
         out_channels = PWHUD_OUT_MAX;
@@ -128,7 +131,11 @@ static void publish_loop(struct hud_publisher *pub, std::atomic<bool> *run)
         snap->drv_ring_bytes = 24576;
         snap->drv_period_bytes = 4096;
         snap->drv_phase_adjust_us = -60 + (int64_t)(step % 30);
-        snap->drv_underruns = 249;
+        /* A total that goes down, which is not a fabricated case: the driver sums
+         * these over its live streams, so an orderly stream teardown removes a
+         * released stream's history from the total.  A real session stepped 9 to 5
+         * that way and the overlay painted it as a fault happening now. */
+        snap->drv_underruns = understep && tick >= understep ? 5 : 249;
         snap->out_channels = out_channels;
         for (unsigned i = 0; i < PWHUD_OUT_MAX; i++)
             snap->out_peak_db[i] = i < out_channels

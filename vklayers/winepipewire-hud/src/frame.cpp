@@ -79,13 +79,22 @@ static void hud_text(enum hud_state state, const char *fmt, ...)
     va_end(args);
 }
 
+/* The driver's own words, verbatim, so a phrase read off the overlay is a phrase
+ * that greps the driver's log.  pipewire.c:2908 sets the field from the same
+ * condition its report_dispatch_mode names "data-thread" or "driver-loop" at
+ * :2917, and this used to render the second of those as "main loop", which in
+ * PipeWire's model is a different thread from the driver loop and sent a reader
+ * chasing a scheduling problem to the wrong place.  UNKNOWN is the field's initial
+ * value, from before report_dispatch_mode has latched anything, so it is reported
+ * as not latched rather than as a third mode: the driver has no word for it
+ * because it never logs one. */
 static const char *dispatch_name(uint32_t dispatch)
 {
     switch (dispatch)
     {
-    case PWHUD_DISPATCH_DATA: return "RT data loop";
-    case PWHUD_DISPATCH_LOOP: return "main loop";
-    default:                  return "unknown";
+    case PWHUD_DISPATCH_DATA: return "data-thread";
+    case PWHUD_DISPATCH_LOOP: return "driver-loop";
+    default:                  return "dispatch not latched";
     }
 }
 
@@ -364,9 +373,28 @@ static void hud_history_update(struct hud_frame_state *st, const struct hud_snap
     for (i = 0; i < HUD_COUNTERS; i++)
     {
         /* The first publish only records where the counters already stood: it
-         * says nothing about when they got there. */
-        if (st->publishes > 1 && counters[i] != st->counter[i])
-            st->counter_ns[i] = a->clock_ns;
+         * says nothing about when they got there.
+         *
+         * Only an increase is a fault happening now.  These totals are summed
+         * over the driver's live streams (pipewire.c:3768-3774), so a released
+         * stream takes its history out of the total and the number goes down: a
+         * real session stepped 9 to 5 across an orderly teardown.  Stamping on
+         * any change painted that decrease in the fault colour for three seconds
+         * and told the reader underruns were happening at the one moment they
+         * demonstrably were not.
+         *
+         * A decrease clears the timestamp instead of setting it.  That is not a
+         * second mechanism: it is the same "nonzero but not seen to move" state
+         * the row already uses before any change is observed, and it is the
+         * truthful one, because after a stream leaves we no longer know when the
+         * remaining streams' faults happened. */
+        if (st->publishes > 1)
+        {
+            if (counters[i] > st->counter[i])
+                st->counter_ns[i] = a->clock_ns;
+            else if (counters[i] < st->counter[i])
+                st->counter_ns[i] = 0;
+        }
         st->counter[i] = counters[i];
     }
 
