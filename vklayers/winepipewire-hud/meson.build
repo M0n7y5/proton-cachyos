@@ -196,6 +196,36 @@ if vulkan_loader.found()
     timeout : 60,
   )
 
+  # The widest bed the ABI can carry and a truncated endpoint, in the view that
+  # draws the most, because that is where the layer's 65535 vertices per draw list
+  # would be reached first.  Level 2 logs the measured count.
+  test('present-smoke-verbose', present_smoke,
+    args : ['0', '2'],
+    depends : layer_so,
+    env : layer_env + {
+      'WINEPIPEWIRE_HUD_OVERLAY_LOG' : '2',
+      'WINEPIPEWIRE_HUD_OVERLAY_VIEW' : '2',
+      'WINEPIPEWIRE_HUD_SMOKE_BEDMASK' : '0x3ffff',
+      'WINEPIPEWIRE_HUD_SMOKE_OUT' : '9',
+      'WINEPIPEWIRE_HUD_SMOKE_TAIL' : '0',
+    },
+    timeout : 60,
+  )
+
+  # An enabled layer asked to draw nothing must leave the frame exactly as
+  # untouched as a disabled one, so the off view is a contract and not an absence
+  # of one.
+  test('present-smoke-view-off', present_smoke,
+    args : ['0', '1'],
+    depends : layer_so,
+    env : layer_env + {
+      'WINEPIPEWIRE_HUD_OVERLAY_LOG' : '2',
+      'WINEPIPEWIRE_HUD_OVERLAY_VIEW' : '0',
+      'WINEPIPEWIRE_HUD_SMOKE_TAIL' : '0',
+    },
+    timeout : 60,
+  )
+
   # An enabled manifest with the gate unset must leave the frame untouched, which
   # the harness asserts rather than merely observing.
   test('present-smoke-gate-off', present_smoke,

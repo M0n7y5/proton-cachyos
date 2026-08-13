@@ -24,14 +24,23 @@ struct hud_config
 {
     bool enabled;
     int log_level;
+    int view_level;
     pid_t pid;
 
     hud_config()
     {
         const char *level = getenv(HUD_ENV_LOG);
+        const char *view = getenv(HUD_ENV_VIEW);
 
         enabled = env_on(HUD_ENV_ENABLE);
         log_level = level ? (int)strtol(level, nullptr, 10) : (enabled ? HUD_LOG_LIFECYCLE : 0);
+        /* Out of range clamps rather than falls back to the default: a typo that
+         * asked for more should not silently give less. */
+        view_level = view && *view ? (int)strtol(view, nullptr, 10) : HUD_VIEW_COMPACT;
+        if (view_level < HUD_VIEW_OFF)
+            view_level = HUD_VIEW_OFF;
+        else if (view_level > HUD_VIEW_VERBOSE)
+            view_level = HUD_VIEW_VERBOSE;
         pid = getpid();
     }
 };
@@ -53,6 +62,11 @@ bool hud_enabled(void)
 int hud_log_level(void)
 {
     return config().log_level;
+}
+
+int hud_view_level(void)
+{
+    return config().view_level;
 }
 
 void hud_logf(const char *fmt, ...)

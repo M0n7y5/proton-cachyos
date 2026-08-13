@@ -821,6 +821,25 @@ bool hud_setup_swapchain(struct swapchain_data *swapchain_data,
     ImGui::GetIO().DisplaySize = ImVec2((float)swapchain_data->extent.width,
                                         (float)swapchain_data->extent.height);
     ImGui::StyleColorsDark();
+
+    /* The baked default font is ProggyClean at 13 px, so an unscaled panel keeps
+     * the same pixel size at every resolution and shrinks by half in apparent
+     * size on the way from 1080p to 4K.  An integer factor keeps the font on its
+     * pixel grid, and the atlas is per swapchain and rebuilt whenever the
+     * application recreates one, so a resolution change needs no font reload.
+     * Ours, not lifted: MangoHud takes its size from a config file instead. */
+    if (unsigned scale = swapchain_data->extent.height / 1080)
+    {
+        ImFontConfig font_cfg;
+
+        if (scale > 4)
+            scale = 4;
+        font_cfg.SizePixels = 13.0f * (float)scale;
+        render->font_atlas->AddFontDefault(&font_cfg);
+        ImGui::GetStyle().ScaleAllSizes((float)scale);
+        HUD_LOG(HUD_LOG_LIFECYCLE, "swapchain is %u px tall, drawing at %ux with a %.0f px font",
+                swapchain_data->extent.height, scale, (double)font_cfg.SizePixels);
+    }
     ImGui::SetCurrentContext(saved);
 
     /* LOAD, not CLEAR: the application's frame is already in the image and the

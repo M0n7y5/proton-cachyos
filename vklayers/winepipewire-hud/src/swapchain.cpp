@@ -152,7 +152,7 @@ static void hud_present_log(struct swapchain_data *swapchain_data,
         uint64_t frames = swapchain_data->presents - swapchain_data->report_presents;
 
         hud_logf("swapchain %p %llu presents in %.3f s (%.1f/s), %ux%u, %u images, %llu samples, "
-                 "%llu torn A, %llu torn B, overlay %s",
+                 "%llu torn A, %llu torn B, %u vertices %u indices, overlay %s",
                  (void *)(uintptr_t)swapchain_data->swapchain, (unsigned long long)frames,
                  (double)elapsed / 1e9, (double)frames * 1e9 / (double)elapsed,
                  swapchain_data->extent.width, swapchain_data->extent.height,
@@ -160,6 +160,7 @@ static void hud_present_log(struct swapchain_data *swapchain_data,
                  (unsigned long long)swapchain_data->snapshot.samples,
                  (unsigned long long)swapchain_data->snapshot.torn_a_total,
                  (unsigned long long)swapchain_data->snapshot.torn_b_total,
+                 swapchain_data->frame.last_vtx, swapchain_data->frame.last_idx,
                  swapchain_data->render.valid ? "drawing" : "off");
         if (snap)
             hud_snapshot_log(&swapchain_data->snapshot);

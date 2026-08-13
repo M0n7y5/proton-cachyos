@@ -68,18 +68,53 @@ static void publish_loop(struct hud_publisher *pub, std::atomic<bool> *run)
      * the flag clear instead, so both renderings can be looked at. */
     const char *dsp_env = getenv("WINEPIPEWIRE_HUD_SMOKE_DSP");
     const float dsp_load = dsp_env ? (float)atof(dsp_env) : 0.0f;
+    /* Section B has three states and all three must be reachable here: never
+     * published, published with an empty bed, and published with levels.  A mask
+     * of 0 is the middle one; the publisher thread not running at all is the
+     * first. */
+    const char *mask_env = getenv("WINEPIPEWIRE_HUD_SMOKE_BEDMASK");
+    const uint32_t bed_mask = mask_env ? (uint32_t)strtoul(mask_env, nullptr, 0)
+                                       : (1u << 0) | (1u << 1);
+    /* Bed channels pinned to the producer's floor, and to a NaN.  A floor reading
+     * beside a live one is the pair the display has to keep distinguishable from
+     * absence, and a NaN is what the spatial publisher emits for a title feeding
+     * NaN audio, which is a render hazard rather than a wrong number. */
+    const char *floor_env = getenv("WINEPIPEWIRE_HUD_SMOKE_BEDFLOOR");
+    const uint32_t bed_floor = floor_env ? (uint32_t)strtoul(floor_env, nullptr, 0) : 0;
+    const char *nan_env = getenv("WINEPIPEWIRE_HUD_SMOKE_BEDNAN");
+    const uint32_t bed_nan = nan_env ? (uint32_t)strtoul(nan_env, nullptr, 0) : 0;
+    /* The output meter's three reachable states, which are the ones that must
+     * never look alike: a real level, nothing held at the publish point, and a
+     * stream whose format carries no meter.  Asking for more channels than the
+     * snapshot meters clamps and reports truncation, the same way the driver
+     * does on a wider endpoint. */
+    const char *out_env = getenv("WINEPIPEWIRE_HUD_SMOKE_OUT");
+    uint32_t out_channels = out_env ? (uint32_t)strtoul(out_env, nullptr, 0) : 2;
+    const uint32_t out_flags = out_channels > PWHUD_OUT_MAX ? PWHUD_F_OUT_TRUNCATED : 0;
+    const char *held_env = getenv("WINEPIPEWIRE_HUD_SMOKE_HELD");
+    const uint32_t no_meter = getenv("WINEPIPEWIRE_HUD_SMOKE_NOMETER") ? PWHUD_F_OUT_NO_METER : 0;
+    /* Every value below normally moves with the tick, which is what proves a
+     * consumer is reading rather than remembering.  Freezing them makes a
+     * rendered frame reproducible, which is what lets two architectures be
+     * compared byte for byte instead of by eye. */
+    const bool statics = getenv("WINEPIPEWIRE_HUD_SMOKE_STATIC") != nullptr;
+
+    if (out_channels > PWHUD_OUT_MAX)
+        out_channels = PWHUD_OUT_MAX;
 
     for (unsigned tick = 0; run->load(); tick++)
     {
         struct pwhud_snapshot *snap = pub->snap;
         struct timespec ts;
-        uint64_t held = 4096 + 2048 * (tick % 8);
+        unsigned step = statics ? 0 : tick;
+        uint64_t held = held_env ? strtoull(held_env, nullptr, 0) : 4096 + 2048 * (step % 8);
 
         clock_gettime(CLOCK_MONOTONIC, &ts);
         pub->a_begin();
         snap->clock_ns = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
         pwhud_flags_publish(snap, PWHUD_F_MASK_A,
-                            PWHUD_F_GRID_VALID | (dsp_env ? 0 : PWHUD_F_NO_DSP_LOAD));
+                            PWHUD_F_GRID_VALID | (dsp_env ? 0 : PWHUD_F_NO_DSP_LOAD) |
+                                out_flags | no_meter);
         snap->pw_quantum = 512;
         snap->pw_rate = 48000;
         /* The graph driver node's, not ours, and deliberately much smaller than
@@ -92,11 +127,13 @@ static void publish_loop(struct hud_publisher *pub, std::atomic<bool> *run)
         snap->drv_held_bytes = held;
         snap->drv_ring_bytes = 24576;
         snap->drv_period_bytes = 4096;
-        snap->drv_phase_adjust_us = -60 + (int64_t)(tick % 30);
+        snap->drv_phase_adjust_us = -60 + (int64_t)(step % 30);
         snap->drv_underruns = 249;
-        snap->out_channels = 2;
-        snap->out_peak_db[0] = -6.0f - (float)(tick % 12);
-        snap->out_peak_db[1] = -9.0f - (float)(tick % 12);
+        snap->out_channels = out_channels;
+        for (unsigned i = 0; i < PWHUD_OUT_MAX; i++)
+            snap->out_peak_db[i] = i < out_channels
+                                       ? -6.0f - 3.0f * (float)i - (float)(step % 12)
+                                       : PWHUD_DB_FLOOR;
         pub->a_end();
 
         if (!(tick % 10))
@@ -104,11 +141,20 @@ static void publish_loop(struct hud_publisher *pub, std::atomic<bool> *run)
             pub->b_begin();
             snap->sp_hrtf = 1;
             snap->sp_bed_virtualized = 1;
-            snap->sp_bed_mask = (1u << 0) | (1u << 1);
-            snap->sp_dyn_live = tick / 10 % 5;
+            snap->sp_bed_mask = bed_mask;
+            snap->sp_dyn_live = step / 10 % 5;
             snap->sp_dyn_max = 128;
-            snap->sp_bed_db[0] = -15.0f - (float)(tick % 6);
-            snap->sp_bed_db[1] = -18.0f - (float)(tick % 6);
+            for (unsigned i = 0; i < PWHUD_BED_MAX; i++)
+            {
+                if (!(bed_mask & (1u << i)))
+                    snap->sp_bed_db[i] = PWHUD_DB_FLOOR;
+                else if (bed_nan & (1u << i))
+                    snap->sp_bed_db[i] = NAN;
+                else if (bed_floor & (1u << i))
+                    snap->sp_bed_db[i] = PWHUD_DB_FLOOR;
+                else
+                    snap->sp_bed_db[i] = -10.0f - 2.0f * (float)i - (float)(step % 6);
+            }
             pwhud_flags_publish(snap, PWHUD_F_MASK_B, 0);
             pub->b_end();
         }
@@ -429,8 +475,28 @@ int main(int argc, char **argv)
 
     VkExtent2D extent = caps.currentExtent;
 
+    /* When the surface leaves the extent to us, a small window rather than 512
+     * square: the overlay draws a few hundred pixels wide once it draws bars, and
+     * the confinement check below only means something when the frame is
+     * comfortably larger than the panel.  Overridable so the same harness can
+     * produce a frame at a resolution that scales the font. */
     if (extent.width == 0xffffffffu)
-        extent = { 512, 512 };
+    {
+        const char *env = getenv("WINEPIPEWIRE_HUD_SMOKE_EXTENT");
+        unsigned w = 0, h = 0;
+
+        extent = { 1024, 768 };
+        if (env && sscanf(env, "%ux%u", &w, &h) == 2 && w && h)
+            extent = { w, h };
+        if (extent.width < caps.minImageExtent.width)
+            extent.width = caps.minImageExtent.width;
+        if (extent.height < caps.minImageExtent.height)
+            extent.height = caps.minImageExtent.height;
+        if (extent.width > caps.maxImageExtent.width)
+            extent.width = caps.maxImageExtent.width;
+        if (extent.height > caps.maxImageExtent.height)
+            extent.height = caps.maxImageExtent.height;
+    }
 
     VkSwapchainCreateInfoKHR swapchain_info = { VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
     swapchain_info.surface = surface;
@@ -476,10 +542,15 @@ int main(int argc, char **argv)
     CHECK(vkCreateSemaphore(device, &semaphore_info, nullptr, &rendered));
 
     /* With a publisher, the run is timed rather than counted: publish for the
-     * requested seconds, then keep presenting for two more so the consumer ages
-     * the snapshot out and reports idle instead of frozen numbers. */
+     * requested seconds, then keep presenting for the tail so the consumer ages
+     * the snapshot out and reports idle instead of frozen numbers.  A zero tail
+     * publishes to the last frame instead, which is what a run that exists to be
+     * looked at wants: the readback below then catches a live panel rather than
+     * an idle one. */
+    const char *tail_env = getenv("WINEPIPEWIRE_HUD_SMOKE_TAIL");
+    const uint64_t tail_ns = (uint64_t)((tail_env ? atof(tail_env) : 2.0) * 1e9);
     const uint64_t deadline_ns =
-        publish_seconds ? hud_mono_ns() + (uint64_t)(publish_seconds + 2) * 1000000000ull : 0;
+        publish_seconds ? hud_mono_ns() + (uint64_t)publish_seconds * 1000000000ull + tail_ns : 0;
     uint32_t frame;
 
     for (frame = 0; deadline_ns ? hud_mono_ns() < deadline_ns : frame < frames; frame++)
@@ -487,8 +558,8 @@ int main(int argc, char **argv)
         VkClearColorValue clear = {};
         uint32_t image_index = 0;
 
-        if (publishing.load() && publish_seconds &&
-            hud_mono_ns() > deadline_ns - 2000000000ull)
+        if (publishing.load() && publish_seconds && tail_ns &&
+            hud_mono_ns() > deadline_ns - tail_ns)
         {
             printf("present_smoke: publisher stopping, the snapshot should age into idle\n");
             fflush(stdout);
@@ -579,9 +650,12 @@ int main(int argc, char **argv)
     readback.cmd = cmd;
     readback.image = images[verify_index];
     readback.extent = extent;
-    /* Same reading of the variable the layer itself makes: set and not "0". */
+    /* Same reading of the gate the layer itself makes, set and not "0", and the
+     * same reading of the view level: an enabled layer asked to draw nothing must
+     * leave the frame alone exactly as a disabled one does. */
     readback.expect_overlay = getenv(HUD_ENV_ENABLE) && *getenv(HUD_ENV_ENABLE) &&
-                              strcmp(getenv(HUD_ENV_ENABLE), "0");
+                              strcmp(getenv(HUD_ENV_ENABLE), "0") &&
+                              hud_view_level() != HUD_VIEW_OFF;
     status = verify_overlay_pixels(&readback);
 
     vkDestroySemaphore(device, rendered, nullptr);

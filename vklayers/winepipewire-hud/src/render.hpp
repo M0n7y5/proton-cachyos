@@ -127,7 +127,4 @@ struct hud_draw *hud_before_present(struct swapchain_data *swapchain_data,
                                     const VkSemaphore *wait_semaphores,
                                     unsigned n_wait_semaphores, unsigned image_index);
 
-/* Ours, not lifted: the ImGui frame contents, in frame.cpp. */
-void hud_build_frame(struct swapchain_data *swapchain_data);
-
 #endif /* WINEPIPEWIRE_HUD_RENDER_HPP */

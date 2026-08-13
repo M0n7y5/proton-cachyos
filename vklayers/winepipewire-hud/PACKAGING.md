@@ -75,3 +75,11 @@ directory to `VK_IMPLICIT_LAYER_PATH`, satisfies the manifest's
 `WINEPIPEWIRE_HUD=1` so the driver publishes the snapshot the overlay reads.
 `WINEPIPEWIRE_HUD_OVERLAY_LOG=2` adds a stderr line per second per swapchain
 carrying the same values the overlay draws.
+
+`WINEPIPEWIRE_HUD_OVERLAY_VIEW` chooses how much is drawn: `1`, the default, is the
+compact panel, `2` adds provenance, the publish history and the fields that are
+unavailable so that their unavailability is visible, and `0` draws nothing while
+leaving the layer loaded. It is a separate variable from the gate on purpose: the
+gate's value is read by the Proton script, by the loader's manifest
+`enable_environment` and by the layer itself, and those three do not have to agree
+about what a value other than `1` means.

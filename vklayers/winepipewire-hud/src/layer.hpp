@@ -12,6 +12,7 @@
 #include <vulkan/vk_layer.h>
 
 #include "log.hpp"
+#include "frame.hpp"
 #include "render.hpp"
 #include "snapshot.hpp"
 
@@ -147,6 +148,7 @@ struct swapchain_data
     uint64_t report_ns;
     uint64_t report_presents;
     struct hud_snapshot_view snapshot;
+    struct hud_frame_state frame;
     struct hud_swapchain_render render;
 };
 
