@@ -17,11 +17,12 @@
  * resampled away by PlotLines, which draws at most one segment per pixel. */
 #define HUD_HISTORY 128
 
-/* pw_xruns, drv_underruns, drv_overruns, drv_bad_buffers, in that order.  A
- * counter answers "is this happening now" with a recency, not with a plot: the
- * value is a total, and a plot of a monotonic total is a staircase nobody can
- * read at a glance. */
-#define HUD_COUNTERS 4
+/* pw_xruns, drv_underruns, drv_overruns, drv_bad_buffers, drv_ring_resyncs, in
+ * that order.  A counter answers "is this happening now" with a recency, not with
+ * a plot: the value is a total, and a plot of a monotonic total is a staircase
+ * nobody can read at a glance.  None of these totals is monotonic, either: the
+ * driver sums each over its live streams, so a released stream lowers them. */
+#define HUD_COUNTERS 5
 
 /* How long a level meter's hold marker stays at a maximum before it follows the
  * level back down. */

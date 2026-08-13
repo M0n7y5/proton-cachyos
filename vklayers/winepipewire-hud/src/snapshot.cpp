@@ -262,7 +262,7 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
         len = snprintf(line, sizeof(line),
                        "drv seq %u age %.1fms %s quantum %u rate %u period %uus streams %u "
                        "dispatch %s dsp %s sinkxrun %u ring %.1f%% (%llu/%llu) jitter %+lldus "
-                       "under %u over %u bad %u",
+                       "under %u over %u bad %u resync %u",
                        a->seq_drv / 2, (double)(now - a->clock_ns) / 1e6, flags, a->pw_quantum,
                        a->pw_rate, a->drv_period_usec, a->pw_stream_count,
                        dispatch_name(a->drv_dispatch), dsp, a->pw_xruns,
@@ -272,7 +272,7 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
                        (unsigned long long)a->drv_held_bytes,
                        (unsigned long long)a->drv_ring_bytes,
                        (long long)a->drv_phase_adjust_us, a->drv_underruns, a->drv_overruns,
-                       a->drv_bad_buffers);
+                       a->drv_bad_buffers, a->drv_ring_resyncs);
 
         if (a->out_channels)
             for (i = 0; i < a->out_channels && i < PWHUD_OUT_MAX && len > 0 &&

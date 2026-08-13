@@ -54,6 +54,7 @@ The right-hand column is the coverage, and it is the point of the table.
 | bad buffers | 0 | 186 of 186 |
 | underruns, stream 1 | 9 over 8075 callbacks, 1.1 per 1000 | all within the first ~5 s of a 43 s stream life, then unchanged for 42 s |
 | underruns, stream 2 | reached 8 | all within ~1 s of activation, then unchanged for the remaining ~140 s |
+| render ring resync repairs | 1 in the session | counted from the driver's own `PipeWire buffer overflow` warning at log line 114078, **not** from `drv_ring_resyncs`, which did not exist in this build. The overlay reported nothing for it, which is the gap this session exposed. A later run's `resync` reading is comparable with this 1 only because the event was counted by hand here |
 | period grid valid | 186 of 186 reports, never lost | flags read `R,grid,nodsp` throughout |
 | phase adjustment | median -57 us, range -340 us to -8 us | 186 reports, against the driver's `+-period_usec/2` clamp of +-5000 us, so 6.8 percent of clamp at worst |
 | ring occupancy | 0.0 percent in 186 of 186 | structural, see below |
@@ -81,8 +82,9 @@ Zero occurrences, each of which would be a regression
 Checked explicitly and absent from all 2581701 lines: `No HRTF effect slot`, which
 is the object-slot leak; `No more objects` and `No dynamic object slots`, which are
 budget exhaustion; `SPTLAUDCLNT`, which is any spatial HRESULT surfacing in a
-message; `invalidated`; `GetBuffer failed`. Also absent: any resync or ring repair
-failure, and the stream release line records `last_error (null)`.
+message; `invalidated`; `GetBuffer failed`. Also absent: any ring repair *failure*,
+which is a different thing from the one repair that succeeded and is recorded in the
+table above, and the stream release line records `last_error (null)`.
 
 Things that read as zero and are not faults
 -------------------------------------------
@@ -97,9 +99,14 @@ Things that read as zero and are not faults
   every publish because it cannot bind PipeWire's profiler, so the overlay shows
   `dsp --`. A build that starts showing a percentage there has gained a feature,
   not drifted.
-- **A `PipeWire buffer overflow` warning increments no counter.** It triggers a
-  ring resync repair and is not an overrun or a bad buffer, so `over 0 bad 0`
-  alongside one of these warnings is consistent, not contradictory.
+- **A `PipeWire buffer overflow` warning is still not an overrun or a bad buffer,
+  so `over 0 bad 0` beside one of these warnings is consistent, not
+  contradictory.** In this session it incremented nothing at all and the overlay
+  could not show it; the driver now counts the successful repair in
+  `drv_ring_resyncs` and the overlay renders it as `resync` on the fault row, so on
+  a current build the same event reads `over 0 bad 0 resync 1`. The failure path is
+  still not counted there, because it reports through `ring_op_failed` and returns
+  an error to the application instead.
 
 Noise that is not ours
 ----------------------

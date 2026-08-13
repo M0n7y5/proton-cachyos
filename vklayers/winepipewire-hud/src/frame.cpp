@@ -370,6 +370,12 @@ static void hud_history_update(struct hud_frame_state *st, const struct hud_snap
     counters[1] = a->drv_underruns;
     counters[2] = a->drv_overruns;
     counters[3] = a->drv_bad_buffers;
+    /* Claimed from the old _pad_a, so an older driver leaves it zero.  That is
+     * indistinguishable from a genuine zero and deliberately not surfaced: the
+     * field reused declared padding, so sizeof stayed 240 and PWHUD_VERSION stayed
+     * 1, and there is nothing in the header a reader could discriminate on even if
+     * it wanted to.  The tool ships driver and layer together. */
+    counters[4] = a->drv_ring_resyncs;
     for (i = 0; i < HUD_COUNTERS; i++)
     {
         /* The first publish only records where the counters already stood: it
@@ -519,6 +525,15 @@ static void hud_live_rows(const struct hud_layout *l, const struct hud_snapshot_
     hud_counter(l, st, 2, "over", a->drv_overruns, now);
     ImGui::SameLine();
     hud_counter(l, st, 3, "bad", a->drv_bad_buffers, now);
+    ImGui::SameLine();
+    /* On this row and not its own, because it is the same kind of thing as the
+     * other four: a total summed over live streams, so it needs the identical
+     * non-monotonic recency treatment, and it is a rare event on a row whose whole
+     * purpose is to be scanned for a non-zero.  A dedicated line would spend a row
+     * of the compact view on a number that is almost always 0, in the view whose
+     * density is the constraint.  "resync" is the driver's own word, from
+     * do_resync_ring and drv_ring_resyncs, so it greps both sides. */
+    hud_counter(l, st, 4, "resync", a->drv_ring_resyncs, now);
 }
 
 /* The output meter, in whichever of its three states the snapshot is actually

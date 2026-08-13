@@ -106,9 +106,14 @@ static void publish_loop(struct hud_publisher *pub, std::atomic<bool> *run)
      * rendered frame reproducible, which is what lets two architectures be
      * compared byte for byte instead of by eye. */
     const bool statics = getenv("WINEPIPEWIRE_HUD_SMOKE_STATIC") != nullptr;
-    /* Tick at which drv_underruns drops from 249 to 5, or 0 to leave it alone. */
+    /* Tick at which the live-stream totals drop, standing in for a stream release,
+     * or 0 to leave them alone: drv_underruns 249 to 5 and drv_ring_resyncs to a
+     * third of its base. */
     const char *understep_env = getenv("WINEPIPEWIRE_HUD_SMOKE_UNDERSTEP");
     const unsigned understep = understep_env ? (unsigned)strtoul(understep_env, nullptr, 10) : 0;
+    /* Base drv_ring_resyncs, default 0 so the usual run renders the zero case. */
+    const char *resyncs_env = getenv("WINEPIPEWIRE_HUD_SMOKE_RESYNCS");
+    const uint32_t resyncs = resyncs_env ? (uint32_t)strtoul(resyncs_env, nullptr, 10) : 0;
 
     if (out_channels > PWHUD_OUT_MAX)
         out_channels = PWHUD_OUT_MAX;
@@ -144,6 +149,19 @@ static void publish_loop(struct hud_publisher *pub, std::atomic<bool> *run)
          * released stream's history from the total.  A real session stepped 9 to 5
          * that way and the overlay painted it as a fault happening now. */
         snap->drv_underruns = understep && tick >= understep ? 5 : 249;
+        /* Zero by default, which is both a clean session and what an older driver
+         * leaves in the padding this field was claimed from, so the default run
+         * renders the zero case.  understep lowers it as well, because it is summed
+         * over live streams exactly like the three beside it and a release takes a
+         * departing stream's repairs out of the total with the rest.
+         *
+         * It rises with the tick unless frozen, because the fault colour is the
+         * whole point of a rare counter: a base that never moves can only ever
+         * render the amber "non-zero, no idea when" state, and that index 4 reaches
+         * the recency slots at all deserves an assertion rather than a reading of
+         * the code. */
+        const uint32_t rs = resyncs + (statics ? 0 : tick / 40);
+        snap->drv_ring_resyncs = understep && tick >= understep ? rs / 3 : rs;
         snap->out_channels = out_channels;
         for (unsigned i = 0; i < PWHUD_OUT_MAX; i++)
             snap->out_peak_db[i] = i < out_channels
