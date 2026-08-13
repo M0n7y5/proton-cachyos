@@ -105,10 +105,11 @@ static const char *bed_name(unsigned i)
 /* Four reachable combinations of the engine and the request, each named for what
  * is actually rendering the bed.  sp_hrtf is the engine, sp_bed_virtualized is the
  * request, and the interesting one is a request with no engine: that is a stream
- * that asked for HRTF, could not load it, and is panning instead.  Nothing else on
- * screen says so, and the driver's configuration trace claims HRTF in that state
- * because it is printed before the engine is created. */
-/* Phrased to follow the row's own "bed" label without repeating it. */
+ * that asked for HRTF, could not load it, and is panning instead.  Those are two
+ * different facts, and printing them side by side left the reader to combine
+ * them; a configuration that did not get what it asked for should be legible
+ * without knowing this codebase, and nothing else on screen says so.
+ * Phrased to follow the row's own "bed" label without repeating it. */
 static const char *bed_backend(uint32_t hrtf, uint32_t virtualized)
 {
     if (virtualized)
