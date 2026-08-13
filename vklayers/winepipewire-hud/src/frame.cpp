@@ -102,6 +102,20 @@ static const char *bed_name(unsigned i)
     return i < sizeof(names) / sizeof(*names) ? names[i] : "?";
 }
 
+/* Four reachable combinations of the engine and the request, each named for what
+ * is actually rendering the bed.  sp_hrtf is the engine, sp_bed_virtualized is the
+ * request, and the interesting one is a request with no engine: that is a stream
+ * that asked for HRTF, could not load it, and is panning instead.  Nothing else on
+ * screen says so, and the driver's configuration trace claims HRTF in that state
+ * because it is printed before the engine is created. */
+/* Phrased to follow the row's own "bed" label without repeating it. */
+static const char *bed_backend(uint32_t hrtf, uint32_t virtualized)
+{
+    if (virtualized)
+        return hrtf ? "HRTF" : "panned, no HRTF engine";
+    return hrtf ? "direct, objects on HRTF" : "direct";
+}
+
 /* Speaker rows in canonical order, left and right slot per row.  A row is drawn
  * only when the bed mask names one of its channels, so a stereo bed is one row
  * and the 16-channel bed a title in the test set ships is eight, while FL stays
@@ -547,6 +561,7 @@ static void hud_bed_rows(const struct hud_layout *l, const struct hud_snapshot_v
     const struct pwhud_snapshot *b = &view->b;
     uint32_t mask;
     unsigned row;
+    bool bed_fallback;
 
     if (!hud_snapshot_spatial_published(view))
     {
@@ -557,15 +572,25 @@ static void hud_bed_rows(const struct hud_layout *l, const struct hud_snapshot_v
     }
 
     mask = b->sp_bed_mask & ((1u << PWHUD_BED_MAX) - 1u);
+    bed_fallback = b->sp_bed_virtualized && !b->sp_hrtf;
 
     /* rms, because these are an RMS accumulation over the update block while the
      * output meter above is a peak, and equal bar lengths in the two blocks
      * therefore do not mean equal loudness.  pre-gain, because SetVolume is
      * applied later during mixing and never to the buffer these are read from,
      * so a title at a quarter volume shows an unchanged bed. */
-    hud_text(HUD_STATE_CONFIG, "bed   %s, %s, rms, pre-gain, %u of %u ch%s",
-             b->sp_hrtf ? "HRTF" : "stereo pan",
-             b->sp_bed_virtualized ? "virtualized" : "direct",
+    /* One resolved phrase, not two independent words.  The snapshot carries the
+     * engine and the request separately, sp_hrtf from stream->engine != 0 and
+     * sp_bed_virtualized from the request, and printing them side by side gave
+     * "stereo pan, virtualized", which is true twice over and still needs the
+     * reader to know the codebase to see that a requested HRTF path fell back to
+     * panning.  The driver's own log has the identical defect in a worse form: it
+     * announces "HRTF bed virtualization" before the engine is created, so it says
+     * that in the fallback too.  Naming the fallback outright is the whole point,
+     * and it is coloured as something to notice rather than as configuration. */
+    hud_text(bed_fallback ? HUD_STATE_WATCH : HUD_STATE_CONFIG,
+             "bed   %s, rms, pre-gain, %u of %u ch%s",
+             bed_backend(b->sp_hrtf, b->sp_bed_virtualized),
              (unsigned)__builtin_popcount(mask), PWHUD_BED_MAX,
              hud_snapshot_flags_b(view) & PWHUD_F_BED_TRUNCATED ? ", +more" : "");
     ImGui::SameLine();
