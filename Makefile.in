@@ -1120,6 +1120,7 @@ WINE_AUTOCONF_ARGS += \
   --with-wayland \
   --with-gstreamer \
   --with-ffmpeg \
+  --with-pipewire \
   --with-libpcap \
   --without-oss \
 
@@ -1873,6 +1874,54 @@ all-dist: vkbasalt
 
 
 ##
+## winepipewire-hud
+##
+## Audio diagnostic overlay for winepipewire.drv, a Vulkan implicit layer that
+## reads the driver's shared-memory snapshot and draws it over the game's
+## swapchain.  Built against winepipewire_hud.h from the patched wine source, so
+## the packaged layer and the packaged driver cannot disagree about that ABI;
+## the header pins its own layout with static assertions, so a mismatch fails
+## the build instead of misreading the page.
+##
+## Three arches like vkbasalt, and one manifest for all of them: library_path is
+## a bare soname and proton puts every lib/<arch>-linux-gnu on LD_LIBRARY_PATH,
+## so each process resolves the matching ELF class.  Verified in both path
+## orders, 32-bit and 64-bit.
+
+WINEPIPEWIRE_HUD_MESON_ARGS = \
+  -Dwine_driver_include_dir=$(WINE_SRC)/dlls/winepipewire.drv
+
+WINEPIPEWIRE_HUD_DEPENDS = vulkan-headers
+
+# The tree's own glslangValidator, on PATH through HOST_DEPENDS. Without this
+# meson silently resolves whatever /usr/bin/glslangValidator the SDK image
+# happens to carry, which is how vkbasalt builds today and is not a property to
+# copy into a new package.
+WINEPIPEWIRE_HUD_HOST_DEPENDS = glslang
+
+$(eval $(call rules-source,winepipewire-hud,$(SRCDIR)/vklayers/winepipewire-hud))
+$(eval $(call rules-meson,winepipewire-hud,i386,unix))
+$(eval $(call rules-meson,winepipewire-hud,x86_64,unix))
+$(eval $(call rules-meson,winepipewire-hud,aarch64,unix))
+
+# The driver, and therefore its header, arrives by patching the wine source, so
+# the layer cannot configure until that has happened.
+$(OBJ)/.winepipewire-hud-post-source: wine-source
+
+$(OBJ)/.winepipewire-hud-x86_64-post-build:
+	mkdir -p $(DST_DIR)/share/winepipewire-hud/implicit_layer.d/
+	cp -a $(WINEPIPEWIRE_HUD_x86_64_DST)/share/vulkan/implicit_layer.d/VkLayer_winepipewire_hud.json $(DST_DIR)/share/winepipewire-hud/implicit_layer.d/
+	touch $@
+
+$(OBJ)/.winepipewire-hud-aarch64-post-build:
+	mkdir -p $(DST_DIR)/share/winepipewire-hud/implicit_layer.d/
+	cp -a $(WINEPIPEWIRE_HUD_aarch64_DST)/share/vulkan/implicit_layer.d/VkLayer_winepipewire_hud.json $(DST_DIR)/share/winepipewire-hud/implicit_layer.d/
+	touch $@
+
+all-dist: winepipewire-hud
+
+
+##
 ## pyroveil
 ##
 
@@ -2480,6 +2529,63 @@ $(DIST_AV1_PATENTS): $(AV1_PATENTS)
 	cp -a $< $@
 
 all-dist: $(DIST_LICENSE) $(DIST_OFL_LICENSE) $(DIST_AV1_PATENTS)
+
+
+##
+## Steam Audio (libphonon)
+##
+## HRTF backend for the mmdevapi spatial audio implementation. It is dlopen'd
+## by dlls/mmdevapi/unix/spatial.c and never linked, so this is purely a
+## packaging dependency and adds nothing at configure time. steamrt does not
+## provide it. Both arches are installed under their own lib dir and both are
+## named libphonon.so (their shared SONAME); the loader picks the right one by
+## ELF class because proton puts every lib/<arch>-linux-gnu on LD_LIBRARY_PATH.
+
+STEAMAUDIO_x86_64_LIB := $(SRC)/contrib/libphonon.so
+DIST_STEAMAUDIO_x86_64 := $(DST_LIBDIR)/x86_64-linux-gnu/libphonon.so
+$(DIST_STEAMAUDIO_x86_64): $(STEAMAUDIO_x86_64_LIB) | $(DST_DIR)
+	mkdir -p $(dir $@)
+	cp -a $< $@
+
+STEAMAUDIO_i386_LIB := $(SRC)/contrib/libphonon32.so
+DIST_STEAMAUDIO_i386 := $(DST_LIBDIR)/i386-linux-gnu/libphonon.so
+$(DIST_STEAMAUDIO_i386): $(STEAMAUDIO_i386_LIB) | $(DST_DIR)
+	mkdir -p $(dir $@)
+	cp -a $< $@
+
+STEAMAUDIO_LICENSE := $(SRC)/contrib/LICENSE.steamaudio
+DIST_STEAMAUDIO_LICENSE := $(DST_BASE)/LICENSE.STEAMAUDIO
+$(DIST_STEAMAUDIO_LICENSE): $(STEAMAUDIO_LICENSE)
+	cp -a $< $@
+
+STEAMAUDIO_THIRDPARTY := $(SRC)/contrib/THIRDPARTY.steamaudio.md
+DIST_STEAMAUDIO_THIRDPARTY := $(DST_BASE)/THIRDPARTY.STEAMAUDIO.md
+$(DIST_STEAMAUDIO_THIRDPARTY): $(STEAMAUDIO_THIRDPARTY)
+	cp -a $< $@
+
+all-dist: $(DIST_STEAMAUDIO_x86_64) $(DIST_STEAMAUDIO_i386)
+all-dist: $(DIST_STEAMAUDIO_LICENSE) $(DIST_STEAMAUDIO_THIRDPARTY)
+
+
+##
+## winepipewire-hud third-party notices
+##
+## The layer statically links Dear ImGui and carries a draw path derived from
+## Mesa's overlay layer and MangoHud.  Every notice is in the sources, but the
+## tool ships binaries, so they ride along at the tool root the same way Steam
+## Audio's do.
+
+WINEPIPEWIRE_HUD_IMGUI_LICENSE := $(SRC)/vklayers/winepipewire-hud/third_party/imgui/LICENSE.txt
+DIST_WINEPIPEWIRE_HUD_IMGUI_LICENSE := $(DST_BASE)/LICENSE.IMGUI
+$(DIST_WINEPIPEWIRE_HUD_IMGUI_LICENSE): $(WINEPIPEWIRE_HUD_IMGUI_LICENSE)
+	cp -a $< $@
+
+WINEPIPEWIRE_HUD_THIRDPARTY := $(SRC)/vklayers/winepipewire-hud/THIRDPARTY.md
+DIST_WINEPIPEWIRE_HUD_THIRDPARTY := $(DST_BASE)/THIRDPARTY.WINEPIPEWIRE_HUD.md
+$(DIST_WINEPIPEWIRE_HUD_THIRDPARTY): $(WINEPIPEWIRE_HUD_THIRDPARTY)
+	cp -a $< $@
+
+all-dist: $(DIST_WINEPIPEWIRE_HUD_IMGUI_LICENSE) $(DIST_WINEPIPEWIRE_HUD_THIRDPARTY)
 
 
 ##

@@ -1947,6 +1947,16 @@ class Session:
             if pyroveil_config:
                 self.env["PYROVEIL_CONFIG"] = pyroveil_config if os.path.isabs(pyroveil_config) else g_proton.dist_dir + "share/pyroveil/hacks/" + pyroveil_config
 
+        # The overlay reads a snapshot the audio driver only publishes when
+        # WINEPIPEWIRE_HUD is set, so enabling the overlay arms the publisher
+        # too. setdefault, because a user who set it explicitly, including to 0,
+        # meant it: the publisher costs about 470 ns per 10 ms period timer tick
+        # and that is their call to refuse.
+        self.check_environment("WINEPIPEWIRE_HUD_OVERLAY", "winepipewirehud")
+        if "winepipewirehud" in self.compat_config:
+            append_to_env_str(self.env, "VK_IMPLICIT_LAYER_PATH", g_proton.dist_dir + "share/winepipewire-hud/implicit_layer.d", ":")
+            self.env.setdefault("WINEPIPEWIRE_HUD", "1")
+
         if "nofsync" in self.compat_config:
             self.env.pop("WINEFSYNC", "")
             self.env["WINEFSYNC"] = "0"

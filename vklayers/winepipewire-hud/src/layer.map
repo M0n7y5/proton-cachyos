@@ -1,0 +1,14 @@
+/* The loader needs exactly these three, and nothing else may leave this library.
+ * Hidden visibility alone is not enough: on i386 the std::vector instantiations
+ * over 64-bit non-dispatchable handles come out of libstdc++ headers as weak
+ * symbols with default visibility, so the 32-bit build exported one.
+ *
+ * SPDX-License-Identifier: MIT */
+{
+    global:
+        vkNegotiateLoaderLayerInterfaceVersion;
+        vkGetInstanceProcAddr;
+        vkGetDeviceProcAddr;
+    local:
+        *;
+};

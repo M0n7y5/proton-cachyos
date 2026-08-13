@@ -1,0 +1,17 @@
+{
+  "file_format_version" : "1.0.0",
+  "layer" : {
+    "name": "VK_LAYER_WINEPIPEWIRE_hud",
+    "type": "GLOBAL",
+    "library_path": "@library_path@",
+    "api_version": "@api_version@",
+    "implementation_version": "1",
+    "description": "winepipewire audio diagnostic overlay",
+    "enable_environment": {
+      "WINEPIPEWIRE_HUD_OVERLAY": "1"
+    },
+    "disable_environment": {
+      "WINEPIPEWIRE_HUD_OVERLAY_DISABLE": "1"
+    }
+  }
+}

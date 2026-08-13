@@ -1,0 +1,7 @@
+option('vulkan_include_dir', type : 'string', value : '',
+       description : 'Directory holding vulkan/vk_layer.h; empty uses the compiler default')
+option('wine_driver_include_dir', type : 'string',
+       value : '../../../wine-cachyos/dlls/winepipewire.drv',
+       description : 'Directory holding the driver-owned winepipewire_hud.h, included by path. ' +
+                     'The default is the sibling wine checkout used for host builds; the Proton ' +
+                     'build passes the patched wine source instead')
