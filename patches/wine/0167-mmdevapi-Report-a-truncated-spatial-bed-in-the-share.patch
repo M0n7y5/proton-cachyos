@@ -1,0 +1,72 @@
+From 1d9f23cd483c3dda7e77b24b0b5f18e72e5d023a Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Thu, 13 Aug 2026 18:17:42 +0200
+Subject: [PATCH 167/168] mmdevapi: Report a truncated spatial bed in the
+ shared snapshot.
+
+---
+ dlls/mmdevapi/spatialaudio.c | 11 +++++++++--
+ dlls/mmdevapi/unix/spatial.c |  4 ++++
+ dlls/mmdevapi/unix/unixlib.h |  3 ++-
+ 3 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index dfd2d8c422a..ac239ed63e8 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -873,10 +873,17 @@ static void spatial_stats_update(SpatialAudioStreamImpl *stream)
+ 
+     for(i = 0; i < SPATIAL_BED_MAX; ++i) hud.bed_db[i] = SPATIAL_DB_FLOOR;
+     hud.bed_mask = 0;
++    hud.bed_truncated = 0;
+     LIST_FOR_EACH_ENTRY(object, &stream->objects, SpatialAudioObjectImpl, entry){
+-        if(object->invalidated || object->type == AudioObjectType_Dynamic ||
+-                object->static_idx >= SPATIAL_BED_MAX)
++        if(object->invalidated || object->type == AudioObjectType_Dynamic)
+             continue;
++        /* The bounds guard and the published bit are the same test, so they
++         * cannot drift: a bed wider than the wire array is reported, not
++         * silently dropped. */
++        if(object->static_idx >= SPATIAL_BED_MAX){
++            hud.bed_truncated = 1;
++            continue;
++        }
+         hud.bed_db[object->static_idx] =
+                 spatial_channel_dbfs(object->buf, stream->update_frames);
+         hud.bed_mask |= 1u << object->static_idx;
+diff --git a/dlls/mmdevapi/unix/spatial.c b/dlls/mmdevapi/unix/spatial.c
+index 164d24d0f33..d8787f3137f 100644
+--- a/dlls/mmdevapi/unix/spatial.c
++++ b/dlls/mmdevapi/unix/spatial.c
+@@ -506,6 +506,10 @@ static NTSTATUS spatial_hud_publish(void *args)
+     snap->sp_dyn_max = params->dyn_max;
+     for (i = 0; i < PWHUD_BED_MAX; i++)
+         snap->sp_bed_db[i] = params->bed_db[i];
++    /* Inside seqlock B, so this bit is validated by seq_sp for a reader that
++     * takes it from the section B copy.  Section A's bits are untouched. */
++    pwhud_flags_publish(snap, PWHUD_F_MASK_B,
++                        params->bed_truncated ? PWHUD_F_BED_TRUNCATED : 0);
+ 
+     __atomic_thread_fence(__ATOMIC_RELEASE);
+     __atomic_store_n(&snap->seq_sp, seq + 2, __ATOMIC_RELAXED);
+diff --git a/dlls/mmdevapi/unix/unixlib.h b/dlls/mmdevapi/unix/unixlib.h
+index dcf1fc22297..79d5f9faab6 100644
+--- a/dlls/mmdevapi/unix/unixlib.h
++++ b/dlls/mmdevapi/unix/unixlib.h
+@@ -90,11 +90,12 @@ struct spatial_hud_params
+     UINT bed_mask;            /* bit i set => bed channel i present */
+     UINT dyn_live;
+     UINT dyn_max;
++    UINT bed_truncated;       /* a bed channel index exceeded SPATIAL_BED_MAX */
+     UINT enabled;             /* out: 0 = no snapshot in this process, stop calling */
+     float bed_db[SPATIAL_BED_MAX];
+ };
+ 
+-C_ASSERT(sizeof(struct spatial_hud_params) == 96);
++C_ASSERT(sizeof(struct spatial_hud_params) == 100);
+ 
+ enum spatial_unix_func
+ {
+-- 
+2.55.0
+

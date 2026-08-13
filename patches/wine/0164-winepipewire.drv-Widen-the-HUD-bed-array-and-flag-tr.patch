@@ -1,0 +1,169 @@
+From fc9e68770cee98b7e7a0912c57c31c0c4acb09b1 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Thu, 13 Aug 2026 17:37:35 +0200
+Subject: [PATCH 164/168] winepipewire.drv: Widen the HUD bed array and flag
+ truncated channel counts.
+
+---
+ dlls/winepipewire.drv/pipewire.c         | 41 ++++++++++++++++++---
+ dlls/winepipewire.drv/winepipewire_hud.h | 45 +++++++++++++++++++++---
+ 2 files changed, 78 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index bc8411a3f4a..64743ed8386 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -3558,6 +3558,30 @@ static void pipewire_read(struct pipewire_stream *stream)
+     }
+ }
+ 
++/* Mirror of hud_peak_scan's switch, including its endianness guard.  Two
++ * switches rather than one because the scan needs a distinct body per format
++ * while this needs only an answer; a format added to one must be added to the
++ * other.  Kept adjacent so that is hard to miss, the same way
++ * spa_format_bytes, silence_buffer and apply_volume already each carry their
++ * own format switch.  Answering without touching audio is what lets
++ * PWHUD_F_OUT_NO_METER stay correct on a stream with nothing queued. */
++static BOOL hud_format_metered(enum spa_audio_format format)
++{
++    switch (format)
++    {
++#ifndef WORDS_BIGENDIAN
++    case SPA_AUDIO_FORMAT_S16_LE:
++    case SPA_AUDIO_FORMAT_S32_LE:
++    case SPA_AUDIO_FORMAT_F32_LE:
++    case SPA_AUDIO_FORMAT_S24_LE:
++#endif
++    case SPA_AUDIO_FORMAT_U8:
++        return TRUE;
++    default:
++        return FALSE;
++    }
++}
++
+ /* Peak magnitude per channel over one contiguous run of frames, accumulated
+  * into peak[].  Format coverage follows apply_volume: what that cannot scale
+  * in place is not metered here either. */
+@@ -3630,12 +3654,21 @@ static BOOL hud_peak_scan(const struct pipewire_stream *stream, const BYTE *buf,
+ /* dBFS of the period of render audio the timer is about to retire.  The held
+  * region is stable under the loop lock: the process callback only copies out
+  * of it and the application writes past its end. */
+-static UINT32 hud_render_peaks(const struct pipewire_stream *stream, float *peak)
++static UINT32 hud_render_peaks(const struct pipewire_stream *stream, float *peak,
++                               UINT32 *flags)
+ {
+     UINT32 channels = min(stream->info.channels, PWHUD_OUT_MAX), i;
+     SIZE_T bytes = min(stream->period_bytes, stream->held_bytes);
+     SIZE_T offs = stream->lcl_offs_bytes, head;
+ 
++    /* Both describe the endpoint, not this tick, so they are set before any
++     * early return: an idle 7.1.4 endpoint still reports truncation and an
++     * idle A-law stream still reports that it has no meter. */
++    if (stream->info.channels > PWHUD_OUT_MAX)
++        *flags |= PWHUD_F_OUT_TRUNCATED;
++    if (!hud_format_metered(stream->info.format))
++        *flags |= PWHUD_F_OUT_NO_METER;
++
+     if (!channels || !bytes || !stream->frame_size || !stream->local_buffer)
+         return 0;
+     for (i = 0; i < channels; i++)
+@@ -3668,7 +3701,7 @@ static void hud_publish(const struct pipewire_period *period, const struct pw_ti
+     struct pwhud_snapshot *snap = hud_snap;
+     const struct pipewire_stream *timer_stream = period->timer_stream;
+     UINT32 seq = __atomic_load_n(&snap->seq_drv, __ATOMIC_RELAXED);
+-    UINT32 under = 0, over = 0, bad = 0, count = 0, channels = 0, i;
++    UINT32 under = 0, over = 0, bad = 0, count = 0, channels = 0, out_flags = 0, i;
+     float peak[PWHUD_OUT_MAX] = { 0.0f };
+     struct pipewire_stream *stream;
+ 
+@@ -3680,7 +3713,7 @@ static void hud_publish(const struct pipewire_period *period, const struct pw_ti
+         count++;
+     }
+     if (timer_stream->dataflow == eRender)
+-        channels = hud_render_peaks(timer_stream, peak);
++        channels = hud_render_peaks(timer_stream, peak, &out_flags);
+     if (!mono_ns)
+     {
+         struct timespec ts;
+@@ -3694,7 +3727,7 @@ static void hud_publish(const struct pipewire_period *period, const struct pw_ti
+ 
+     snap->clock_ns = mono_ns;
+     snap->flags = (timer_stream->dataflow == eCapture ? PWHUD_F_CAPTURE : 0) |
+-                  (period->grid_valid ? PWHUD_F_GRID_VALID : 0);
++                  (period->grid_valid ? PWHUD_F_GRID_VALID : 0) | out_flags;
+     snap->pw_quantum = have_time ? (UINT32)pwt->size : 0;
+     snap->pw_rate = have_time && pwt->rate.num ? pwt->rate.denom / pwt->rate.num : 0;
+     /* Graph-wide xruns and DSP load live in the Profiler POD, which needs a
+diff --git a/dlls/winepipewire.drv/winepipewire_hud.h b/dlls/winepipewire.drv/winepipewire_hud.h
+index ace909da3e5..643765e01c4 100644
+--- a/dlls/winepipewire.drv/winepipewire_hud.h
++++ b/dlls/winepipewire.drv/winepipewire_hud.h
+@@ -32,7 +32,37 @@
+ #define PWHUD_MAGIC     0x54535750u  /* 'PWST' */
+ #define PWHUD_VERSION   1u
+ #define PWHUD_BYTES     4096u
+-#define PWHUD_BED_MAX   16u
++/* 18, not 16, and not a round number somebody should tidy.
++ *
++ * AudioObjectType has 17 distinct static positions, FrontLeft 0x2 through
++ * BackCenter 0x20000 (include/spatialaudioclient.idl:27-43), which is why
++ * spatialaudio.c declares static_object_map[17].  16 was therefore below the
++ * real ceiling.  It was also provably reached: GTA V Enhanced ships a
++ * 16-channel static bed, 7.1 without LFE plus 4 Top plus 4 Bottom plus
++ * BackCenter (spatial-audio-test-games.md:11), so a title in the test set sat
++ * exactly on the old boundary with no margin.
++ *
++ * 18 rather than 17 for alignment: 17 floats is 68 bytes and takes sizeof to
++ * 236, which fails the sizeof % 8 assertion below and would need a trailing
++ * pad field to fix.  18 floats is 72 bytes and lands on 240 with no pad, and
++ * the spare slot sits above the real ceiling rather than inside it.
++ *
++ * Changed while section B was still unpublished, when it cost one constant
++ * and two assertions.  Once step 2 fills these fields in, the same change is
++ * an ABI migration. */
++#define PWHUD_BED_MAX   18u
++
++/* out_peak_db counts the driver's own output channels to the endpoint, from
++ * the negotiated PipeWire format, not spatial bed channels: those are
++ * sp_bed_db[PWHUD_BED_MAX], written by the other publisher.
++ *
++ * 8 is chosen, not assumed.  It covers stereo through 7.1, which is every
++ * endpoint that occurs here, and the scan is O(frames x channels) so raising
++ * it would double the worst-case tick cost for a configuration nobody has.
++ * A wider endpoint (7.1.4 over HDMI is the realistic case) is metered on its
++ * first 8 channels and says so with PWHUD_F_OUT_TRUNCATED, which is the part
++ * that matters: the limit is visible rather than silent.  Raising this is an
++ * ABI change; adding a flag bit is not. */
+ #define PWHUD_OUT_MAX   8u
+ 
+ /* $HOME is bind-mounted into the Steam pressure-vessel container at the same
+@@ -42,8 +72,15 @@
+ #define PWHUD_DIR_SUFFIX  "/.cache/winepipewire"
+ #define PWHUD_FILE_PREFIX "hud."
+ 
+-#define PWHUD_F_CAPTURE    0x1u  /* the published stream is eCapture */
+-#define PWHUD_F_GRID_VALID 0x2u  /* period timer grid locked to the graph clock */
++#define PWHUD_F_CAPTURE        0x1u  /* the published stream is eCapture */
++#define PWHUD_F_GRID_VALID     0x2u  /* period timer grid locked to the graph clock */
++#define PWHUD_F_OUT_TRUNCATED  0x4u  /* endpoint has more than PWHUD_OUT_MAX channels;
++                                      * out_channels is the metered count, not the real one */
++#define PWHUD_F_BED_TRUNCATED  0x8u  /* section B: bed wider than PWHUD_BED_MAX.  Defined
++                                      * here so step 2 inherits the convention rather than
++                                      * inventing one; nothing sets it until then */
++#define PWHUD_F_OUT_NO_METER   0x10u /* the negotiated format carries no peak meter, so
++                                      * out_channels 0 means "no meter", not "silent" */
+ 
+ #define PWHUD_DISPATCH_UNKNOWN 0u
+ #define PWHUD_DISPATCH_DATA    1u
+@@ -99,7 +136,7 @@ struct pwhud_snapshot
+     float    sp_bed_db[PWHUD_BED_MAX];
+ };
+ 
+-C_ASSERT(sizeof(struct pwhud_snapshot) == 232);
++C_ASSERT(sizeof(struct pwhud_snapshot) == 240);
+ C_ASSERT(sizeof(struct pwhud_snapshot) <= PWHUD_BYTES);
+ C_ASSERT(sizeof(struct pwhud_snapshot) % 8 == 0);
+ C_ASSERT(sizeof(float) == 4);
+-- 
+2.55.0
+
