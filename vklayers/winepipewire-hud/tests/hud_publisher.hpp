@@ -26,7 +26,10 @@ struct hud_publisher
     char path[4096] = {};
 
     /* Uses the reader's own path builder, so the two cannot disagree about
-     * where the file lives. */
+     * where the file lives.  The corollary bites: with HUD_ENV_PID set, the
+     * layer is pointed at another process's snapshot and this resolves to that
+     * same file, so publishing here overwrites what was to be observed.  See the
+     * warning in present_smoke.cpp's header. */
     bool open(void)
     {
         char dir[4096];

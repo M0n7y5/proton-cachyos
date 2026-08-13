@@ -14,6 +14,14 @@
  * publisher stops.  A game has the driver and the layer in one process, which is
  * the arrangement being reproduced here without a Wine tree.
  *
+ * Do not combine publish_seconds with WINEPIPEWIRE_HUD_OVERLAY_PID.  That
+ * variable retargets the layer at another process's snapshot, and the publisher
+ * below builds its path with the same hud_snapshot_path() the layer uses, so it
+ * resolves to the same file: the harness then overwrites the snapshot it was
+ * pointed at and the frame shows this publisher's values under the other
+ * process's pid.  It looks like the layer read the wrong file.  To watch a real
+ * driver in another process, use frame-count mode, which starts no publisher.
+ *
  * Exit 0 presented, 77 skipped (no headless surface support), 1 failed.
  *
  * SPDX-License-Identifier: MIT
