@@ -26,6 +26,7 @@ jobs:
       tag_offset: ${{ steps.version.outputs.tag_offset }}
       sha_short: ${{ steps.version.outputs.sha_short }}
       full_desc: ${{ steps.version.outputs.full_desc }}
+      build_desc: ${{ steps.version.outputs.build_desc }}
       branch: ${{ steps.version.outputs.branch }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
@@ -43,7 +44,14 @@ jobs:
         echo "tag_abbrev=$tag_abbrev" >> $GITHUB_OUTPUT
         echo "tag_offset=$(git rev-list $tag_abbrev..HEAD --count)" >> $GITHUB_OUTPUT
         echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-        echo "full_desc=$(git describe --long --tags)" >> $GITHUB_OUTPUT
+        full_desc=$(git describe --long --tags)
+        echo "full_desc=$full_desc" >> $GITHUB_OUTPUT
+        if [[ "$full_desc" == cachyos-* ]]; then
+          build_desc=${full_desc/#cachyos-/cachyos-pipewire-}
+        else
+          build_desc=pipewire-${full_desc}
+        fi
+        echo "build_desc=$build_desc" >> $GITHUB_OUTPUT
         echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
 
     - name: Matrix
@@ -78,7 +86,7 @@ jobs:
         include: ${{ fromJSON(needs.version.outputs.matrix) }}
     uses: ./.github/workflows/_job_build.yml
     with:
-      name: proton-${{ needs.version.outputs.full_desc }}-${{ matrix.variant }}
+      name: proton-${{ needs.version.outputs.build_desc }}-${{ matrix.variant }}
       cflags: ${{ matrix.cflags }}
       rustflags: ${{ matrix.rustflags }}
       configure: --enable-ccache ${{ matrix.configure }}
@@ -93,6 +101,6 @@ jobs:
         include: ${{ fromJSON(needs.version.outputs.matrix) }}
     uses: ./.github/workflows/_job_test.yml
     with:
-      name: proton-${{ needs.version.outputs.full_desc }}-${{ matrix.variant }}
+      name: proton-${{ needs.version.outputs.build_desc }}-${{ matrix.variant }}
       runner: ${{ matrix.variant == 'arm64' && 'ubicloud-standard-4-arm' || 'ubicloud-standard-4' }}
       continue: true
