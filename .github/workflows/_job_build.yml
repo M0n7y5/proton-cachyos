@@ -77,11 +77,34 @@ jobs:
         fetch-tags: true
         submodules: false
 
+    - name: Submodule identifier
+      id: submodules-id
+      run: |
+        pins=$(git submodule status | sha1sum | cut -d' ' -f1)
+        echo "pins=$pins" >> $GITHUB_OUTPUT
+
+    - name: Restore submodule cache
+      id: submodules-restore
+      uses: actions/cache/restore@v5
+      with:
+        path: .git/modules
+        key: submodules-${{ hashFiles('.gitmodules') }}-${{ steps.submodules-id.outputs.pins }}
+        restore-keys: |
+          submodules-${{ hashFiles('.gitmodules') }}-
+
     - name: Patch
       run: |
         git submodule update --init --filter=tree:0 --recursive
         mkdir ./build
         ./contrib/fetch-steamaudio.sh
+
+    - name: Save submodule cache
+      id: submodules-save
+      if: always() && steps.submodules-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: .git/modules
+        key: ${{ steps.submodules-restore.outputs.cache-primary-key }}
 
     - name: Configure
       working-directory: ./build
