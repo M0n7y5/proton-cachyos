@@ -6,6 +6,7 @@ on:
     branches:
       - 'cachyos_*_*/main'
       - 'cachyos_*_*/dev'
+      - 'pipewire-ci'
 
 concurrency:
   group: ${{ github.ref_name }}

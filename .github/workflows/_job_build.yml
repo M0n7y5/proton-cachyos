@@ -80,6 +80,7 @@ jobs:
       run: |
         git submodule update --init --filter=tree:0 --recursive
         mkdir ./build
+        ./contrib/fetch-steamaudio.sh
 
     - name: Configure
       working-directory: ./build

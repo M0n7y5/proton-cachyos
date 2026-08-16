@@ -1,0 +1,9 @@
+# Fetched by fetch-steamaudio.sh
+/libphonon.so
+/libphonon32.so
+/LICENSE.steamaudio
+/THIRDPARTY.steamaudio.md
+*.zip
+
+# Makefile.in also downloads these into contrib/ during make redist
+*.tar.xz
