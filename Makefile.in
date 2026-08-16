@@ -1162,6 +1162,42 @@ ifneq ($(WITHOUT_LIBPCAP),1)
 WINE_DEPENDS += libpcap
 endif
 
+# Stock steamrt4 ships libpipewire-0.3-dev for amd64 but only the i386 runtime.
+# Wine configure hard-errors when --with-pipewire is explicit and the i386
+# development files are missing. Local builds never saw this because the
+# steamrt4-sdk-pipewire image papers over the gap with an equivalent ln+sed
+# layer.
+ifneq ($(findstring i386,$(unix_ARCHS)),)
+PIPEWIRE_i386_DST := $(OBJ)/dst-pipewire-i386
+PIPEWIRE_i386_LIBDIR := $(PIPEWIRE_i386_DST)/lib
+PIPEWIRE_i386_INCDIR := $(PIPEWIRE_i386_DST)/include
+
+$(OBJ)/.pipewire-i386-build:
+	@echo ":: stubbing pipewire-i386 pkg-config..." >&2
+	mkdir -p $(PIPEWIRE_i386_INCDIR)
+	mkdir -p $(PIPEWIRE_i386_LIBDIR)/$(i386-unix_LIBDIR)/pkgconfig
+	if [ ! -f /usr/lib/$(i386-unix_LIBDIR)/pkgconfig/libpipewire-0.3.pc ]; then \
+	    ln -sfn /usr/lib/$(i386-unix_LIBDIR)/libpipewire-0.3.so.0 \
+	        $(PIPEWIRE_i386_LIBDIR)/$(i386-unix_LIBDIR)/libpipewire-0.3.so; \
+	    sed 's|x86_64-linux-gnu|i386-linux-gnu|' \
+	        /usr/lib/$(x86_64-unix_LIBDIR)/pkgconfig/libpipewire-0.3.pc \
+	        > $(PIPEWIRE_i386_LIBDIR)/$(i386-unix_LIBDIR)/pkgconfig/libpipewire-0.3.pc; \
+	fi
+	touch $@
+
+pipewire-i386-build: $(OBJ)/.pipewire-i386-build
+.INTERMEDIATE: pipewire-i386-build
+
+$(OBJ)/.pipewire-i386-post-build: $(OBJ)/.pipewire-i386-build
+
+pipewire-i386-distclean::
+	rm -rf $(PIPEWIRE_i386_DST)
+	rm -f $(OBJ)/.pipewire-i386-build $(OBJ)/.pipewire-i386-post-build
+distclean: pipewire-i386-distclean
+
+WINE_i386_DEPENDS += pipewire
+endif
+
 WINE_i386_LIBDIR = $(WINE_i386_DST)/lib
 WINE_x86_64_LIBDIR = $(WINE_x86_64_DST)/lib
 WINE_aarch64_LIBDIR = $(WINE_aarch64_DST)/lib
