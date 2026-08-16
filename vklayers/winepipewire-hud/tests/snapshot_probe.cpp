@@ -71,6 +71,9 @@ static void publish_b(struct hud_publisher &pub, uint32_t bed_mask, uint32_t bit
     snap->sp_dyn_max = 128;
     for (unsigned i = 0; i < PWHUD_BED_MAX; i++)
         snap->sp_bed_db[i] = bed_mask & (1u << i) ? -15.0f - (float)i : PWHUD_DB_FLOOR;
+    /* Inside the seqlock with the bed values it describes, as the driver does
+     * (spatial.c:553), so seq_sp/2 == sp_publishes on every torn-free copy. */
+    snap->sp_publishes++;
     pwhud_flags_publish(snap, PWHUD_F_MASK_B, bits);
     pub.b_end();
 }
@@ -93,6 +96,7 @@ int main(void)
 
     now = hud_mono_ns();
     publish_a(pub, 12288, -12, PWHUD_F_GRID_VALID, now);
+    pub.announce();
     publish_b(pub, (1u << 0) | (1u << 1) | (1u << 4), PWHUD_F_BED_TRUNCATED);
 
     /* The production discovery path: own pid, no override, same builder the
@@ -130,6 +134,12 @@ int main(void)
     check(hud_snapshot_flags_b(&view) == PWHUD_F_BED_TRUNCATED,
           "section B view decodes only PWHUD_F_MASK_B");
     check(hud_snapshot_spatial_published(&view), "section B reads as published once seq_sp moved");
+    /* Both predicates, deliberately.  On any writer the driver can produce they are
+     * equivalent, because a mix is unreachable without a prior announce, so
+     * asserting the pair pins that equivalence where a future divergence would
+     * surface instead of leaving one of them unexercised. */
+    check(hud_snapshot_spatial_state(&view) == HUD_SPATIAL_LIVE,
+          "a published mix reads as HUD_SPATIAL_LIVE");
     check(!hud_snapshot_idle(&view, hud_mono_ns()), "a fresh clock_ns does not read as idle");
     hud_snapshot_log(&view);
 
@@ -206,6 +216,10 @@ int main(void)
     {
         struct hud_snapshot_view empty_bed = {};
 
+        /* Announce again: the degraded case above cleared sp_clients along with the
+         * rest of section B, and a mix without a live client is a state the driver
+         * cannot produce. */
+        pub.announce();
         publish_b(pub, 0, 0);
         hud_snapshot_sample(&empty_bed, snap);
         check(hud_snapshot_spatial_published(&empty_bed),

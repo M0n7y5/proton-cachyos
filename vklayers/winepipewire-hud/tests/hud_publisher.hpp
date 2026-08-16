@@ -107,6 +107,18 @@ struct hud_publisher
         __atomic_store_n(&snap->seq_drv, seq + 1, __ATOMIC_RELAXED);
     }
 
+    /* The driver's announce path, which every activating stream takes: stamp
+     * sp_clients and return without entering seqlock B (spatial.c:535-539).
+     * Outside the lock on purpose, because every activating stream writes this
+     * while only the elected stream writes the bed.  A mix is unreachable in the
+     * driver without a prior announce, so a harness that mixes without announcing
+     * manufactures a state the producer cannot reach and would let the reader be
+     * asserted against a snapshot no driver will ever publish. */
+    void announce(void)
+    {
+        __atomic_fetch_add(&snap->sp_clients, 1, __ATOMIC_RELEASE);
+    }
+
     void b_begin(void)
     {
         uint32_t seq = __atomic_load_n(&snap->seq_sp, __ATOMIC_RELAXED);
