@@ -1,0 +1,32 @@
+From eb671dee2340808ebc2a73bca56623dd5d5a2711 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sun, 16 Aug 2026 20:05:04 +0200
+Subject: [PATCH 189/189] mmdevapi: Validate the HUD snapshot against the
+ version-1 baseline size.
+
+---
+ dlls/mmdevapi/unix/spatial.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/mmdevapi/unix/spatial.c b/dlls/mmdevapi/unix/spatial.c
+index 654140c0e49..03bfb8327cc 100644
+--- a/dlls/mmdevapi/unix/spatial.c
++++ b/dlls/mmdevapi/unix/spatial.c
+@@ -490,10 +490,11 @@ static void hud_map_once(void)
+         return;
+     }
+     /* The creator stamps magic last, so a valid magic means the header is
+-     * complete.  size guards against writing section B into a shorter file
+-     * left by an older build. */
++     * complete.  size is tested against PWHUD_SIZE_V1_BASE, not sizeof: the
++     * append rule is what lets a newer build write section B into an older
++     * writer's page, and testing sizeof would reject exactly that case. */
+     if (__atomic_load_n(&snap->magic, __ATOMIC_ACQUIRE) != PWHUD_MAGIC ||
+-        snap->version > PWHUD_VERSION || snap->size < sizeof(*snap))
++        snap->version > PWHUD_VERSION || snap->size < PWHUD_SIZE_V1_BASE)
+     {
+         WARN("%s is not a usable snapshot (magic %#x version %u size %u)\n", path,
+              snap->magic, snap->version, snap->size);
+-- 
+2.55.0
+
