@@ -110,10 +110,17 @@ jobs:
         restore-keys: |
           ccache-proton-${{ steps.ccache-id.outputs.checksum }}
 
+    - name: Size ccache
+      run: ccache -M 15G
+
     - name: Make ${{ inputs.name }}
       working-directory: ./build
       run: |
         make redist
+
+    - name: ccache stats
+      if: always()
+      run: ccache -s
 
     - name: Save cache
       id: ccache-save
@@ -134,4 +141,3 @@ jobs:
       with:
         name: ${{ inputs.name }}.sha512sum
         path: ./build/${{ inputs.name }}.sha512sum
-
