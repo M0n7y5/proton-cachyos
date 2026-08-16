@@ -21,7 +21,7 @@ on:
       runner:
         required: false
         type: string
-        default: 'ubicloud-standard-16'
+        default: 'ubicloud-standard-30'
       continue:
         required: true
         type: boolean
