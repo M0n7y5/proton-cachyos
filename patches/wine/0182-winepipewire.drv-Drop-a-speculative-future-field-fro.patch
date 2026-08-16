@@ -1,0 +1,27 @@
+From 2783ba72a381c368f9616688772673c85ac1057e Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sun, 16 Aug 2026 09:53:33 +0200
+Subject: [PATCH 182/184] winepipewire.drv: Drop a speculative future field
+ from the xruns comment.
+
+---
+ dlls/winepipewire.drv/winepipewire_hud.h | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/dlls/winepipewire.drv/winepipewire_hud.h b/dlls/winepipewire.drv/winepipewire_hud.h
+index 240704963c8..22e5e470efc 100644
+--- a/dlls/winepipewire.drv/winepipewire_hud.h
++++ b/dlls/winepipewire.drv/winepipewire_hud.h
+@@ -153,8 +153,7 @@ struct pwhud_snapshot
+      * starving is drv_underruns, a different failure with a different fix.
+      *
+      * A count of observed episodes.  The underlying signal is spa_io_clock.xrun,
+-     * an accumulated duration in samples at the clock rate, so a future field
+-     * could carry milliseconds without rediscovering that; one episode here is
++     * an accumulated duration in samples at the clock rate; one episode here is
+      * one increase of that accumulator, however many quanta it spans. */
+     uint32_t pw_xruns;
+     uint32_t pw_stream_count;
+-- 
+2.55.0
+
