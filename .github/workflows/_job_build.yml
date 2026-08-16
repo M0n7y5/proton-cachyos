@@ -111,7 +111,7 @@ jobs:
           ccache-proton-${{ steps.ccache-id.outputs.checksum }}
 
     - name: Size ccache
-      run: ccache -M 15G
+      run: ccache -M 25G
 
     - name: Make ${{ inputs.name }}
       working-directory: ./build
