@@ -167,6 +167,16 @@ static void publish_loop(struct hud_publisher *pub, std::atomic<bool> *run)
             snap->out_peak_db[i] = i < out_channels
                                        ? -6.0f - 3.0f * (float)i - (float)(step % 12)
                                        : PWHUD_DB_FLOOR;
+        /* One started render stream, the elected one, so the overlay takes the
+         * per-stream path a current writer produces and still draws the same
+         * number of meter rows as the legacy out block. */
+        snap->drv_stream_id = 7;
+        snap->drv_group_streams = 1;
+        snap->drv_str_count = 1;
+        snap->drv_str[0].id = 7;
+        snap->drv_str[0].channels = no_meter ? 0 : out_channels;
+        for (unsigned i = 0; i < PWHUD_OUT_MAX; i++)
+            snap->drv_str[0].peak_db[i] = snap->out_peak_db[i];
         pub->a_end();
 
         if (!(tick % 10))

@@ -79,6 +79,11 @@ bool hud_snapshot_idle(const struct hud_snapshot_view *view, uint64_t now_ns);
  * same rule the flag masks follow. */
 bool hud_snapshot_have_stream_scope(const struct hud_snapshot_view *view);
 bool hud_snapshot_have_spatial_counts(const struct hud_snapshot_view *view);
+/* True when the writer carries drv_str[].  Presence is decided by size and
+ * never by drv_str_count, because an older writer leaves the count at the zero
+ * the page was created with and zero is also a live empty group. */
+bool hud_snapshot_have_stream_meters(const struct hud_snapshot_view *view);
+C_ASSERT(HUD_SNAPSHOT_THROUGH(drv_str) == PWHUD_SIZE_V1_STR);
 
 /* Section B's three reachable states.  All three used to render as the one string
  * "never published", and the first is the ordinary case for a title that never

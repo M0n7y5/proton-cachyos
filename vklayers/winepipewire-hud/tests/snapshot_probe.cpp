@@ -231,6 +231,59 @@ int main(void)
         hud_snapshot_log(&empty_bed);
     }
 
+    /* Per-stream meters: presence is size, never the count.  An older writer
+     * leaves drv_str_count at the zero the page was created with, and zero is
+     * also a live empty group, so a value test cannot tell them apart. */
+    {
+        uint32_t saved = pub.snap->size;
+
+        pub.a_begin();
+        pub.snap->size = PWHUD_SIZE_V1_BASE;
+        pub.snap->drv_str_count = 2;
+        pub.snap->drv_str[0].id = 14;
+        pub.a_end();
+        hud_snapshot_sample(&view, snap);
+        check(!hud_snapshot_have_stream_meters(&view),
+              "a baseline-sized writer does not carry drv_str even if the count is nonzero");
+
+        pub.a_begin();
+        pub.snap->size = HUD_SNAPSHOT_THROUGH(drv_group_streams);
+        pub.a_end();
+        hud_snapshot_sample(&view, snap);
+        check(hud_snapshot_have_stream_scope(&view),
+              "stream scope is present before the per-stream block");
+        check(!hud_snapshot_have_stream_meters(&view),
+              "stream scope size is not enough for drv_str");
+
+        pub.a_begin();
+        pub.snap->size = saved;
+        pub.snap->drv_str_count = 0;
+        pub.a_end();
+        hud_snapshot_sample(&view, snap);
+        check(hud_snapshot_have_stream_meters(&view),
+              "a writer that carries drv_str is recognised by size, including a zero count");
+
+        pub.a_begin();
+        pub.snap->drv_str_count = 2;
+        pub.snap->drv_stream_id = 16;
+        pub.snap->drv_str[0].id = 14;
+        pub.snap->drv_str[0].channels = 2;
+        pub.snap->drv_str[0].peak_db[0] = -6.0f;
+        pub.snap->drv_str[0].peak_db[1] = -12.5f;
+        pub.snap->drv_str[1].id = 16;
+        pub.snap->drv_str[1].channels = 0;
+        pwhud_flags_publish(pub.snap, PWHUD_F_MASK_A,
+                            PWHUD_F_GRID_VALID | PWHUD_F_STR_TRUNCATED);
+        pub.a_end();
+        hud_snapshot_sample(&view, snap);
+        check(view.a.drv_str_count == 2 && view.a.drv_str[0].id == 14 &&
+                  view.a.drv_str[1].channels == 0,
+              "per-stream slots survive the seqlock copy");
+        check((hud_snapshot_flags_a(&view) & PWHUD_F_STR_TRUNCATED) != 0,
+              "PWHUD_F_STR_TRUNCATED is a section A bit");
+        hud_snapshot_log(&view);
+    }
+
     /* A file that is not a snapshot is refused rather than misparsed. */
     {
         uint32_t magic = pub.snap->magic;

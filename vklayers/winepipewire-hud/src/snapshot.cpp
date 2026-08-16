@@ -49,11 +49,12 @@ const char *bed_name(unsigned i)
  * section B and is validated by seq_sp, not by seq_drv. */
 void flags_a_str(uint32_t flags, char *buf, size_t len)
 {
-    snprintf(buf, len, "%s%s%s%s%s", flags & PWHUD_F_CAPTURE ? "C" : "R",
+    snprintf(buf, len, "%s%s%s%s%s%s", flags & PWHUD_F_CAPTURE ? "C" : "R",
              flags & PWHUD_F_GRID_VALID ? ",grid" : ",nogrid",
              flags & PWHUD_F_OUT_TRUNCATED ? ",trunc" : "",
              flags & PWHUD_F_OUT_NO_METER ? ",nometer" : "",
-             flags & PWHUD_F_NO_DSP_LOAD ? ",nodsp" : "");
+             flags & PWHUD_F_NO_DSP_LOAD ? ",nodsp" : "",
+             flags & PWHUD_F_STR_TRUNCATED ? ",strtrunc" : "");
 }
 
 /* Seqlock A.  An odd sequence means a publish is in flight, and a sequence that
@@ -244,6 +245,11 @@ bool hud_snapshot_have_spatial_counts(const struct hud_snapshot_view *view)
     return view->have_b && view->b.size >= HUD_SNAPSHOT_THROUGH(sp_publishes);
 }
 
+bool hud_snapshot_have_stream_meters(const struct hud_snapshot_view *view)
+{
+    return view->have_a && view->a.size >= HUD_SNAPSHOT_THROUGH(drv_str);
+}
+
 enum hud_spatial_state hud_snapshot_spatial_state(const struct hud_snapshot_view *view)
 {
     /* An older writer has neither counter, so fall back to the rule that held
@@ -273,7 +279,7 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
     const struct pwhud_snapshot *b = &view->b;
     enum hud_spatial_state spatial = hud_snapshot_spatial_state(view);
     uint64_t now = hud_mono_ns();
-    char flags[32];
+    char flags[48];
     char counts[40];
     char line[512];
     int len;
@@ -355,6 +361,34 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
 
         hud_logf("%s%s%s", line, hud_snapshot_idle(view, now) ? " IDLE" : "",
                  view->torn_a ? " TORN, previous copy" : "");
+
+        if (hud_snapshot_have_stream_meters(view))
+        {
+            unsigned s, n = a->drv_str_count < PWHUD_STR_MAX ? a->drv_str_count : PWHUD_STR_MAX;
+
+            for (s = 0; s < n; s++)
+            {
+                const struct pwhud_str *str = &a->drv_str[s];
+                char peaks[128];
+                unsigned c, plen = 0;
+
+                if (!str->channels)
+                {
+                    hud_logf("str %u%s: no data", str->id,
+                             str->id && str->id == a->drv_stream_id ? " elected" : "");
+                    continue;
+                }
+                peaks[0] = 0;
+                for (c = 0; c < str->channels && c < PWHUD_OUT_MAX && plen < sizeof(peaks); c++)
+                    plen += snprintf(peaks + plen, sizeof(peaks) - plen, "%s%.1f",
+                                     c ? " " : "", str->peak_db[c]);
+                hud_logf("str %u%s: ch %u %s", str->id,
+                         str->id && str->id == a->drv_stream_id ? " elected" : "",
+                         str->channels, peaks);
+            }
+            if (hud_snapshot_flags_a(view) & PWHUD_F_STR_TRUNCATED)
+                hud_logf("str: +more");
+        }
     }
 
     if (spatial == HUD_SPATIAL_ABSENT)

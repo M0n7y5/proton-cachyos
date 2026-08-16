@@ -417,6 +417,37 @@ static void hud_history_update(struct hud_frame_state *st, const struct hud_snap
             st->out_hold_ns[i] = a->clock_ns;
         }
     }
+
+    if (hud_snapshot_have_stream_meters(view))
+    {
+        unsigned s, n = a->drv_str_count < PWHUD_STR_MAX ? a->drv_str_count : PWHUD_STR_MAX;
+
+        for (s = 0; s < n; s++)
+        {
+            if (st->str_hold_id[s] != a->drv_str[s].id)
+            {
+                st->str_hold_id[s] = a->drv_str[s].id;
+                for (i = 0; i < PWHUD_OUT_MAX; i++)
+                {
+                    st->str_hold[s][i] = 0.0f;
+                    st->str_hold_ns[s][i] = 0;
+                }
+            }
+            for (i = 0; i < a->drv_str[s].channels && i < PWHUD_OUT_MAX; i++)
+            {
+                float v = a->drv_str[s].peak_db[i];
+
+                if (!std::isfinite(v))
+                    continue;
+                if (!st->str_hold_ns[s][i] || v >= st->str_hold[s][i] ||
+                    a->clock_ns - st->str_hold_ns[s][i] > HUD_HOLD_NS)
+                {
+                    st->str_hold[s][i] = v;
+                    st->str_hold_ns[s][i] = a->clock_ns;
+                }
+            }
+        }
+    }
 }
 
 /* Configuration: what the stream is, which changes at setup and then not at all.
@@ -552,10 +583,73 @@ static void hud_live_rows(const struct hud_layout *l, const struct hud_snapshot_
     hud_counter(l, st, 4, "resync", a->drv_ring_resyncs, now);
 }
 
+static bool hud_str_contains_id(const struct pwhud_snapshot *a, uint32_t id)
+{
+    unsigned i, n = a->drv_str_count < PWHUD_STR_MAX ? a->drv_str_count : PWHUD_STR_MAX;
+
+    if (!id)
+        return false;
+    for (i = 0; i < n; i++)
+        if (a->drv_str[i].id == id)
+            return true;
+    return false;
+}
+
+static void hud_str_rows(const struct hud_layout *l, const struct hud_snapshot_view *view,
+                         const struct hud_frame_state *st)
+{
+    const struct pwhud_snapshot *a = &view->a;
+    uint32_t flags = hud_snapshot_flags_a(view);
+    unsigned s, n = a->drv_str_count < PWHUD_STR_MAX ? a->drv_str_count : PWHUD_STR_MAX;
+
+    for (s = 0; s < n; s++)
+    {
+        const struct pwhud_str *str = &a->drv_str[s];
+        bool elected = str->id && str->id == a->drv_stream_id;
+        bool all_floor = true;
+        unsigned i, drawn = 0;
+
+        if (!str->channels)
+        {
+            hud_text(HUD_STATE_NA, "str %s%u  NO DATA  nothing to scan",
+                     elected ? "#" : "", str->id);
+            continue;
+        }
+        for (i = 0; i < str->channels && i < PWHUD_OUT_MAX; i++)
+            if (str->peak_db[i] > PWHUD_DB_FLOOR || !std::isfinite(str->peak_db[i]))
+                all_floor = false;
+        hud_text(HUD_STATE_CONFIG, "str %s%u  peak, %u ch%s%s",
+                 elected ? "#" : "", str->id, str->channels,
+                 flags & PWHUD_F_OUT_TRUNCATED && elected ? ", +more" : "",
+                 all_floor ? ", all at floor" : "");
+        while (drawn < str->channels && drawn < PWHUD_OUT_MAX)
+        {
+            ImVec2 origin = ImGui::GetCursorScreenPos();
+            int column = 0;
+
+            while (column < 2 && drawn < str->channels && drawn < PWHUD_OUT_MAX)
+            {
+                char label[8];
+
+                snprintf(label, sizeof(label), "ch%u", drawn + 1);
+                hud_meter(l, origin, column, label, str->peak_db[drawn],
+                          st->str_hold[s][drawn], l->verbose);
+                column++;
+                drawn++;
+            }
+            ImGui::Dummy(ImVec2(l->cell_w * 2.0f, l->line));
+        }
+    }
+    if (flags & PWHUD_F_STR_TRUNCATED)
+        hud_text(HUD_STATE_WATCH, "str   +more");
+}
+
 /* The output meter, in whichever of its three states the snapshot is actually
  * in.  Absence draws no track, because the metered channel count is itself zero
  * in that state: eight empty tracks would be a channel count the overlay
- * invented. */
+ * invented.  When the writer carries drv_str[] and the elected stream is one of
+ * those rows, that list replaces this block so the elected stream is not drawn
+ * twice. */
 static void hud_out_rows(const struct hud_layout *l, const struct hud_snapshot_view *view,
                          const struct hud_frame_state *st)
 {
@@ -563,6 +657,13 @@ static void hud_out_rows(const struct hud_layout *l, const struct hud_snapshot_v
     uint32_t flags = hud_snapshot_flags_a(view);
     unsigned i, drawn = 0;
     bool all_floor = true;
+
+    if (hud_snapshot_have_stream_meters(view) && a->drv_str_count)
+    {
+        hud_str_rows(l, view, st);
+        if (hud_str_contains_id(a, a->drv_stream_id))
+            return;
+    }
 
     if (!a->out_channels)
     {

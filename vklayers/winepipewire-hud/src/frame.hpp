@@ -61,6 +61,9 @@ struct hud_frame_state
     uint64_t bed_hold_ns[PWHUD_BED_MAX];
     float out_hold[PWHUD_OUT_MAX];
     uint64_t out_hold_ns[PWHUD_OUT_MAX];
+    uint32_t str_hold_id[PWHUD_STR_MAX];
+    float str_hold[PWHUD_STR_MAX][PWHUD_OUT_MAX];
+    uint64_t str_hold_ns[PWHUD_STR_MAX][PWHUD_OUT_MAX];
 
     /* Reported by the once-a-second log line, so the worst case is measured
      * rather than estimated.  The layer has no vertex offset support, which caps
