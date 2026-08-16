@@ -24,6 +24,14 @@
  * than numbers that look live but are frozen. */
 #define HUD_SNAPSHOT_STALE_NS 1000000000ull
 
+/* End offset of one snapshot field, so a size check names the field it protects
+ * instead of a number that has to be kept in step with the header.  The driver
+ * header's PWHUD_SIZE_V1_BASE covers every field a version 1 writer has always
+ * published; this is for the ones appended after it, which an older writer leaves
+ * at the zero the page was created with. */
+#define HUD_SNAPSHOT_THROUGH(field) \
+    (offsetof(struct pwhud_snapshot, field) + sizeof(((struct pwhud_snapshot *)0)->field))
+
 /* One per consumer, holding the last torn-free copy of each section.  The two
  * sections have one writer each on opposite sides of the PE/unix boundary, so a
  * successful read of one says nothing about the other and they are tracked
@@ -63,9 +71,39 @@ uint32_t hud_snapshot_flags_a(const struct hud_snapshot_view *view);
 uint32_t hud_snapshot_flags_b(const struct hud_snapshot_view *view);
 
 bool hud_snapshot_idle(const struct hud_snapshot_view *view, uint64_t now_ns);
-/* False until the spatial publisher's first write lands.  A process whose audio
- * never goes through ISpatialAudioClient stays here forever, which is not the
- * same statement as a bed of zeroes. */
+/* True when the writer carries the fields appended after PWHUD_SIZE_V1_BASE:
+ * section A's stream identity, section B's client and mix counts.  Presence is
+ * decided by size and never by a value, because an older writer leaves all four
+ * at the zero the page was created with and zero means something in three of
+ * them.  One predicate per section, each read from that section's own copy, the
+ * same rule the flag masks follow. */
+bool hud_snapshot_have_stream_scope(const struct hud_snapshot_view *view);
+bool hud_snapshot_have_spatial_counts(const struct hud_snapshot_view *view);
+
+/* Section B's three reachable states.  All three used to render as the one string
+ * "never published", and the first is the ordinary case for a title that never
+ * asks for spatial audio: read as a fault, it produced a bug report against a
+ * process that was behaving correctly. */
+enum hud_spatial_state
+{
+    HUD_SPATIAL_ABSENT,  /* sp_clients 0, so no spatial stream has ever existed here */
+    HUD_SPATIAL_NO_MIX,  /* activated, and not one mix published since */
+    HUD_SPATIAL_LIVE,    /* the bed levels came from a mix */
+};
+
+enum hud_spatial_state hud_snapshot_spatial_state(const struct hud_snapshot_view *view);
+
+/* False until the first mix publish lands.  Not the announce: the announce path
+ * increments sp_clients and returns before seqlock B is entered (spatial.c:535-539),
+ * so an activation leaves seq_sp at 0 and only the elected stream's mix moves it.
+ * On any writer the driver can produce that makes this exactly
+ * hud_snapshot_spatial_state() == HUD_SPATIAL_LIVE, because a mix is unreachable
+ * without a prior announce: spatial_hud_claim refuses once hud_off has latched
+ * (spatialaudio.c:849) and the announce fires at activation whenever it has not.
+ * Prefer hud_snapshot_spatial_state, which also names HUD_SPATIAL_NO_MIX, the
+ * activated-but-never-mixed stream this predicate folds into false.  A process
+ * whose audio never goes through ISpatialAudioClient stays here forever, which is
+ * not the same statement as a bed of zeroes. */
 bool hud_snapshot_spatial_published(const struct hud_snapshot_view *view);
 /* False when the driver cannot measure the graph's DSP load, which it cannot
  * without binding PipeWire's Profiler from a second connection.  pw_dsp_load is

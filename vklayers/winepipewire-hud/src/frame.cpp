@@ -425,7 +425,7 @@ static void hud_config_rows(const struct hud_layout *l, const struct hud_snapsho
 {
     const struct pwhud_snapshot *a = &view->a;
     uint32_t flags = hud_snapshot_flags_a(view);
-    char rate[16], quantum[16];
+    char rate[16], quantum[16], scope[32];
 
     if (a->pw_rate)
         snprintf(rate, sizeof(rate), "%u Hz", a->pw_rate);
@@ -436,10 +436,26 @@ static void hud_config_rows(const struct hud_layout *l, const struct hud_snapsho
     else
         snprintf(quantum, sizeof(quantum), "q --");
 
-    hud_text(HUD_STATE_CONFIG, "%s %s  %s  %.2f ms  %s  %u str",
+    /* Two scopes on one row, kept terse because this row is width-constrained
+     * and the long form pushed the overlay past the bounds the present smoke
+     * test asserts.  "4 str  #7/2" is: four streams in this process, and every
+     * other section A number describes stream 7, one of the two started render
+     * streams in its period group.  The id is a monotonic counter and not an
+     * index into that two, hence the #, so it can be the larger number.  The
+     * verbose legend below spells this out; the row itself cannot afford to.
+     * Unavailable rather than 0 where there is no id, because 0 is not a
+     * stream. */
+    if (!hud_snapshot_have_stream_scope(view))
+        snprintf(scope, sizeof(scope), "--");
+    else if (!a->drv_stream_id)
+        snprintf(scope, sizeof(scope), "none");
+    else
+        snprintf(scope, sizeof(scope), "#%u/%u", a->drv_stream_id, a->drv_group_streams);
+
+    hud_text(HUD_STATE_CONFIG, "%s %s  %s  %.2f ms  %s  %u str  %s",
              flags & PWHUD_F_CAPTURE ? "capture" : "render", rate, quantum,
              (double)a->drv_period_usec / 1000.0, dispatch_name(a->drv_dispatch),
-             a->pw_stream_count);
+             a->pw_stream_count, scope);
     ImGui::SameLine();
     hud_text(flags & PWHUD_F_GRID_VALID ? HUD_STATE_CONFIG : HUD_STATE_FAULT, "%s",
              flags & PWHUD_F_GRID_VALID ? "grid" : "no grid");
@@ -603,15 +619,28 @@ static void hud_bed_rows(const struct hud_layout *l, const struct hud_snapshot_v
                          const struct hud_frame_state *st)
 {
     const struct pwhud_snapshot *b = &view->b;
+    enum hud_spatial_state spatial = hud_snapshot_spatial_state(view);
     uint32_t mask;
     unsigned row;
     bool bed_fallback;
 
-    if (!hud_snapshot_spatial_published(view))
+    if (spatial == HUD_SPATIAL_ABSENT)
     {
-        /* A process whose audio never goes through ISpatialAudioClient stays
-         * here for its whole life, which is not a bed of zeroes. */
-        hud_text(HUD_STATE_NA, "bed   never published");
+        /* Benign, and by far the most common: a title whose audio never goes
+         * through ISpatialAudioClient stays here for its whole life.  This row
+         * said "never published", which reads as a broken spatial path, and it
+         * was reported as one against a process doing nothing wrong.  Worded as
+         * a state the process is in rather than as something missing, and kept
+         * short because the row is width-constrained. */
+        hud_text(HUD_STATE_NA, "bed   no spatial stream");
+        return;
+    }
+    if (spatial == HUD_SPATIAL_NO_MIX)
+    {
+        /* The fault the old wording hid.  Activation stamps sp_clients on its own, so a
+         * stream can be counted and never have mixed a sample, and the bed
+         * fields then carry nothing to draw: no meters follow this row. */
+        hud_text(HUD_STATE_FAULT, "bed   NO MIX (%u seen)", b->sp_clients);
         return;
     }
 
@@ -644,6 +673,15 @@ static void hud_bed_rows(const struct hud_layout *l, const struct hud_snapshot_v
         hud_text(HUD_STATE_LIVE, "obj %u/%u", b->sp_dyn_live, b->sp_dyn_max);
     else
         hud_text(HUD_STATE_NA, "obj none");
+
+    if (l->verbose && hud_snapshot_have_spatial_counts(view))
+    {
+        ImGui::SameLine();
+        /* clients counts activations, stamped by every activating stream; mixes
+         * counts publishes by the one elected to write the bed.  The pair separates
+         * a spatial stream that merely exists from a mixer that is running. */
+        hud_text(HUD_STATE_LIVE, "%u client(s), %u mixes", b->sp_clients, b->sp_publishes);
+    }
 
     if (!mask)
     {
@@ -767,6 +805,11 @@ void hud_build_frame(struct swapchain_data *swapchain_data)
             hud_text(HUD_STATE_CONFIG, "ticks %.0f and %.0f, pip is a %.1f s hold",
                      (double)hud_ticks_db[0], (double)hud_ticks_db[1],
                      (double)HUD_HOLD_NS / 1e9);
+            /* Two lines, not one: the single long form pushed the drawn region
+             * past three quarters of the window and the present smoke test
+             * caught it. */
+            hud_text(HUD_STATE_CONFIG, "str counts this process,");
+            hud_text(HUD_STATE_CONFIG, "#id/n is the metered stream of its group");
         }
         /* A courtesy credit, not a licence obligation: Steam Audio ships no NOTICE
          * file, upstream or in the SDK, so Apache-2.0 section 4(d) is not engaged,

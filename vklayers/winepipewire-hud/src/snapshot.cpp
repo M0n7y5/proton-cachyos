@@ -58,7 +58,12 @@ void flags_a_str(uint32_t flags, char *buf, size_t len)
 
 /* Seqlock A.  An odd sequence means a publish is in flight, and a sequence that
  * moved during the copy means one landed inside it; either way the payload is
- * discarded rather than mixed. */
+ * discarded rather than mixed.
+ *
+ * The copy is the whole struct, so a field appended to either section rides along
+ * with no change here.  What that does not decide is which copy a field may be
+ * read from: only section A's fields are validated by this sequence, so only they
+ * may be taken from this copy. */
 bool read_section_a(const struct pwhud_snapshot *snap, struct pwhud_snapshot *out)
 {
     for (int attempt = 0; attempt < 4; attempt++)
@@ -133,9 +138,13 @@ const struct pwhud_snapshot *hud_snapshot_open_path(const char *path)
         return nullptr;
     }
     /* The creator stamps magic last, so a valid magic means the header landed.
-     * A newer producer may have appended fields, hence >= and not ==. */
+     * Validated against the version 1 baseline and not against this reader's own
+     * sizeof, in both directions: a newer writer appends fields this build does
+     * not know, and an older writer is shorter than this build's struct while
+     * still carrying every field the baseline promises.  Testing sizeof would
+     * reject the second case, which is the one the append rule exists for. */
     if (__atomic_load_n(&snap->magic, __ATOMIC_ACQUIRE) != PWHUD_MAGIC ||
-        snap->version > PWHUD_VERSION || snap->size < sizeof(*snap))
+        snap->version > PWHUD_VERSION || snap->size < PWHUD_SIZE_V1_BASE)
     {
         HUD_LOG(HUD_LOG_LIFECYCLE, "%s is not a usable snapshot (magic %#x version %u size %u)",
                 path, snap->magic, snap->version, snap->size);
@@ -168,8 +177,9 @@ const struct pwhud_snapshot *hud_snapshot_map(void)
     if (!(mapped = hud_snapshot_open_path(path)))
         return nullptr;
 
-    HUD_LOG(HUD_LOG_LIFECYCLE, "reading %s, writer pid %u, version %u, size %u%s", path,
+    HUD_LOG(HUD_LOG_LIFECYCLE, "reading %s, writer pid %u, version %u, size %u%s%s", path,
             mapped->writer_pid, mapped->version, mapped->size,
+            mapped->size < sizeof(*mapped) ? " (older writer, trailing fields absent)" : "",
             getenv(HUD_ENV_PID) ? " (pid overridden, not this process)" : "");
     return mapped;
 }
@@ -224,6 +234,34 @@ bool hud_snapshot_spatial_published(const struct hud_snapshot_view *view)
     return view->have_b && view->b.seq_sp != 0;
 }
 
+bool hud_snapshot_have_stream_scope(const struct hud_snapshot_view *view)
+{
+    return view->have_a && view->a.size >= HUD_SNAPSHOT_THROUGH(drv_group_streams);
+}
+
+bool hud_snapshot_have_spatial_counts(const struct hud_snapshot_view *view)
+{
+    return view->have_b && view->b.size >= HUD_SNAPSHOT_THROUGH(sp_publishes);
+}
+
+enum hud_spatial_state hud_snapshot_spatial_state(const struct hud_snapshot_view *view)
+{
+    /* An older writer has neither counter, so fall back to the rule that held
+     * before they existed: only a mix publish moved seq_sp, so a moved
+     * sequence does mean live and a still one means nothing ever published. */
+    if (!hud_snapshot_have_spatial_counts(view))
+        return hud_snapshot_spatial_published(view) ? HUD_SPATIAL_LIVE : HUD_SPATIAL_ABSENT;
+
+    /* sp_clients is stamped at activation and is deliberately outside seqlock
+     * B, because every activating stream writes it while only the elected one
+     * writes the bed.  It is therefore the authority on whether a spatial
+     * client exists, and seq_sp is not: an activation no longer moves the
+     * sequence at all. */
+    if (!view->b.sp_clients)
+        return HUD_SPATIAL_ABSENT;
+    return view->b.sp_publishes ? HUD_SPATIAL_LIVE : HUD_SPATIAL_NO_MIX;
+}
+
 bool hud_snapshot_dsp_load_valid(const struct hud_snapshot_view *view)
 {
     return view->have_a && !(hud_snapshot_flags_a(view) & PWHUD_F_NO_DSP_LOAD);
@@ -233,8 +271,10 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
 {
     const struct pwhud_snapshot *a = &view->a;
     const struct pwhud_snapshot *b = &view->b;
+    enum hud_spatial_state spatial = hud_snapshot_spatial_state(view);
     uint64_t now = hud_mono_ns();
     char flags[32];
+    char counts[40];
     char line[512];
     int len;
     unsigned i;
@@ -251,20 +291,35 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
     else
     {
         char dsp[16];
+        char scope[96];
 
         flags_a_str(hud_snapshot_flags_a(view), flags, sizeof(flags));
         if (hud_snapshot_dsp_load_valid(view))
             snprintf(dsp, sizeof(dsp), "%.1f%%", 100.0 * (double)a->pw_dsp_load);
         else
             snprintf(dsp, sizeof(dsp), "n/a");
+        /* Which stream section A is about.  Every field on this line except
+         * pw_stream_count and sinkxrun describes one stream, and nothing here used
+         * to say which one, so one stream's peaks read as the whole process's
+         * output.  streams is the process-wide count, showing is the elected
+         * stream inside its period group: the two are different scopes and the
+         * ratio only makes sense against the group. */
+        if (!hud_snapshot_have_stream_scope(view))
+            snprintf(scope, sizeof(scope), "unavailable, writer predates the field");
+        else if (!a->drv_stream_id)
+            snprintf(scope, sizeof(scope), "no stream elected");
+        else
+            snprintf(scope, sizeof(scope), "stream id %u of the %u started in its period group",
+                     a->drv_stream_id, a->drv_group_streams);
         /* sinkxrun is the graph driver node's, shared with every client on that
          * device; under is our own ring starving.  Different failures. */
         len = snprintf(line, sizeof(line),
-                       "drv seq %u age %.1fms %s quantum %u rate %u period %uus streams %u "
+                       "drv seq %u age %.1fms %s quantum %u rate %u period %uus "
+                       "streams %u in process showing %s "
                        "dispatch %s dsp %s sinkxrun %u ring %.1f%% (%llu/%llu) jitter %+lldus "
                        "under %u over %u bad %u resync %u",
                        a->seq_drv / 2, (double)(now - a->clock_ns) / 1e6, flags, a->pw_quantum,
-                       a->pw_rate, a->drv_period_usec, a->pw_stream_count,
+                       a->pw_rate, a->drv_period_usec, a->pw_stream_count, scope,
                        dispatch_name(a->drv_dispatch), dsp, a->pw_xruns,
                        a->drv_ring_bytes ? 100.0 * (double)a->drv_held_bytes /
                                                (double)a->drv_ring_bytes
@@ -302,18 +357,45 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
                  view->torn_a ? " TORN, previous copy" : "");
     }
 
-    if (!hud_snapshot_spatial_published(view))
+    if (spatial == HUD_SPATIAL_ABSENT)
     {
-        /* Never published is not a bed of zeroes and not a bed at the floor: a
-         * process whose audio never goes through ISpatialAudioClient stays here
-         * for its whole life, and rendering it as levels would be a lie. */
-        hud_logf("spatial: never published%s", view->torn_b ? " (last read torn)" : "");
+        /* Benign, and the common case: a process whose audio never goes through
+         * ISpatialAudioClient stays here for its whole life.  This said "never
+         * published", which reads as a fault, and a report of a broken spatial
+         * path turned out to be exactly this state and nothing else. */
+        hud_logf("spatial: inactive, no spatial stream in this process%s",
+                 view->torn_b ? " (last read torn)" : "");
+        return;
+    }
+    if (spatial == HUD_SPATIAL_NO_MIX)
+    {
+        /* The fault the old wording hid.  An activation stamps sp_clients and
+         * returns without entering seqlock B, so this state still has seq_sp 0 and
+         * sp_publishes 0: nothing has ever been written into the bed fields, and
+         * there is nothing to draw rather than something stale to draw. */
+        hud_logf("spatial: %u client(s) activated but no mix published%s", b->sp_clients,
+                 view->torn_b ? " (last read torn)" : "");
         return;
     }
 
-    len = snprintf(line, sizeof(line), "spatial seq %u hrtf %u bedvirt %u dyn %u/%u mask 0x%04x%s",
-                   b->seq_sp / 2, b->sp_hrtf, b->sp_bed_virtualized, b->sp_dyn_live, b->sp_dyn_max,
-                   b->sp_bed_mask,
+    /* Both printed, and they are expected to be equal: only the elected stream's
+     * mix moves seq_sp, and sp_publishes is incremented inside that same protected
+     * region, so seq_sp/2 == sp_publishes on every torn-free copy.  That is the
+     * point of printing both rather than a reason to drop one.  Deciding whether
+     * this copy was torn is the whole job of the reader above, and these are two
+     * fields from inside one seqlock that must agree, so a line where they differ
+     * says the reader accepted a copy it should have rejected.  It is the cheapest
+     * assertion available that the seqlock discipline is working, and it sits in
+     * the log where such a bug would first show.  Do not delete one as redundant. */
+    if (hud_snapshot_have_spatial_counts(view))
+        snprintf(counts, sizeof(counts), "clients %u mixes %u", b->sp_clients, b->sp_publishes);
+    else
+        snprintf(counts, sizeof(counts), "clients n/a mixes n/a");
+
+    len = snprintf(line, sizeof(line),
+                   "spatial seq %u %s hrtf %u bedvirt %u dyn %u/%u mask 0x%04x%s",
+                   b->seq_sp / 2, counts, b->sp_hrtf, b->sp_bed_virtualized, b->sp_dyn_live,
+                   b->sp_dyn_max, b->sp_bed_mask,
                    hud_snapshot_flags_b(view) & PWHUD_F_BED_TRUNCATED ? ",bedtrunc" : "");
 
     if (!b->sp_bed_mask)
