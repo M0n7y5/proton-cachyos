@@ -89,14 +89,14 @@ jobs:
             configure: >-
               --without-nvidia-libs
               --target-arch=arm64
-            runner: 'ubuntu-24.04-arm'
+            runner: 'ubicloud-standard-8-arm'
     uses: ./.github/workflows/_job_build.yml
     with:
       name: ${{ matrix.name }}
       cflags: ${{ matrix.cflags }}
       rustflags: ${{ matrix.rustflags }}
       configure: --enable-ccache ${{ matrix.configure }}
-      runner: ${{ matrix.runner != '' && matrix.runner || 'ubuntu-24.04' }}
+      runner: ${{ matrix.runner != '' && matrix.runner || 'ubicloud-standard-16' }}
       continue: true
 
   test:
@@ -112,9 +112,9 @@ jobs:
           - name: proton-${{ needs.version.outputs.full_desc }}-x86_64_v3-llvm
           - name: proton-${{ needs.version.outputs.full_desc }}-x86_64-llvm-wow64
           - name: proton-${{ needs.version.outputs.full_desc }}-arm64
-            runner: 'ubuntu-24.04-arm'
+            runner: 'ubicloud-standard-4-arm'
     uses: ./.github/workflows/_job_test.yml
     with:
       name: ${{ matrix.name }}
-      runner: ${{ matrix.runner != '' && matrix.runner || 'ubuntu-24.04' }}
+      runner: ${{ matrix.runner != '' && matrix.runner || 'ubicloud-standard-4' }}
       continue: true

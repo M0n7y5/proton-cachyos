@@ -9,7 +9,7 @@ on:
       runner:
         required: false
         type: string
-        default: 'ubuntu-24.04'
+        default: 'ubicloud-standard-4'
       continue:
         required: true
         type: boolean

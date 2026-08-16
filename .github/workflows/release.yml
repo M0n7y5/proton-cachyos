@@ -29,14 +29,14 @@ jobs:
             configure: >-
               --without-nvidia-libs
               --target-arch=arm64
-            runner: 'ubuntu-24.04-arm'
+            runner: 'ubicloud-standard-8-arm'
     uses: ./.github/workflows/_job_build.yml
     with:
       name: ${{ matrix.name }}
       cflags: ${{ matrix.cflags }}
       rustflags: ${{ matrix.rustflags }}
       configure: ${{ matrix.configure }}
-      runner: ${{ matrix.runner != '' && matrix.runner || 'ubuntu-24.04' }}
+      runner: ${{ matrix.runner != '' && matrix.runner || 'ubicloud-standard-16' }}
       continue: false
 
   release:

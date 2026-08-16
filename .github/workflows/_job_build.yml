@@ -21,7 +21,7 @@ on:
       runner:
         required: false
         type: string
-        default: 'ubuntu-24.04'
+        default: 'ubicloud-standard-16'
       continue:
         required: true
         type: boolean
@@ -34,6 +34,7 @@ jobs:
     steps:
 
     - name: Debloat GitHub runner
+      if: ${{ !startsWith(inputs.runner, 'ubicloud') }}
       uses: endersonmenezes/free-disk-space@v3
       with:
         remove_android: true
