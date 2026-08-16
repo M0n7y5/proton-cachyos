@@ -1,0 +1,33 @@
+From 983ede6d615eab37d5a79033110ecef191ae5422 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sun, 16 Aug 2026 11:37:39 +0200
+Subject: [PATCH 186/187] mmdevapi: Drop the line-number pins from the hud_off
+ comment.
+
+---
+ dlls/mmdevapi/spatialaudio.c | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/mmdevapi/spatialaudio.c b/dlls/mmdevapi/spatialaudio.c
+index e5f8bf1f8b7..9e4d9c9b78c 100644
+--- a/dlls/mmdevapi/spatialaudio.c
++++ b/dlls/mmdevapi/spatialaudio.c
+@@ -221,11 +221,10 @@ static SpatialAudioStreamImpl *hud_stream;
+ /* One-way and process-wide on purpose, because both ways of setting it are
+  * permanent for the process and neither can turn transient:
+  *   - the snapshot file is created only by the driver's hud_init, whose one
+- *     call site is pipewire_process_attach (pipewire.c:1079), so it exists
+- *     from before the first stream or it never exists;
+- *   - the unix side maps at most once, hud_map_once behind if (!hud_state)
+- *     (spatial.c:518-519), and nothing resets hud_state, so a failed map is
+- *     never retried even if the file did appear.
++ *     call site is pipewire_process_attach, so it exists from before the
++ *     first stream or it never exists;
++ *   - the unix side maps at most once via hud_map_once, and nothing resets
++ *     a failed map, so it is never retried even if the file did appear.
+  * Clearing this on stream release would therefore re-learn the same answer at
+  * 10 Hz forever, one unixlib transition per tick, and would also restart the
+  * per-tick dBFS pass that want_hud gates.  If either half above ever stops
+-- 
+2.55.0
+
