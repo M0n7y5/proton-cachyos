@@ -86,6 +86,25 @@ bool hud_snapshot_have_clip_stats(const struct hud_snapshot_view *view);
  * never by drv_str_count, because an older writer leaves the count at the zero
  * the page was created with and zero is also a live empty group. */
 bool hud_snapshot_have_stream_meters(const struct hud_snapshot_view *view);
+
+/* Power sum of the present bed channels, in dBFS.
+ *
+ * The per-channel rows are what a title writes, and on real content they read
+ * far quieter than what the mixer then hands the two-channel bus.  A reader
+ * looking at twelve quiet numbers concluded the spatial path was quiet while
+ * the clip was truncating, which is a wrong conclusion drawn from correct
+ * numbers, so the set needs one figure of its own.
+ *
+ * Power and not amplitude, which is a floor and not a prediction: twelve
+ * channels at -18 dBFS sum to -7.2 dBFS here, while the same twelve fully
+ * correlated reach +3.6 dBFS on the bus, 10.8 dB higher.  Correlation is
+ * exactly what this publisher cannot observe, so the correlation-free sum is
+ * the honest one, and the threshold below is calibrated to it rather than
+ * derived: on the CP2077 capture, this figure at or above -15.5 dBFS agreed
+ * with clipping on 91.9% of buckets, catching 63 of 83 clipping buckets against
+ * 18 false positives in 384 calm ones.  Returns PWHUD_DB_FLOOR when nothing is
+ * present. */
+float hud_snapshot_bed_power_db(const struct hud_snapshot_view *view);
 C_ASSERT(HUD_SNAPSHOT_THROUGH(drv_str) == PWHUD_SIZE_V1_STR);
 
 /* Section B's three reachable states.  All three used to render as the one string

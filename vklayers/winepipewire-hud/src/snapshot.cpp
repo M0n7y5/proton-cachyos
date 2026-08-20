@@ -5,6 +5,7 @@
 
 #include "log.hpp"
 
+#include <cmath>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -259,6 +260,27 @@ bool hud_snapshot_have_stream_meters(const struct hud_snapshot_view *view)
     return view->have_a && view->a.size >= HUD_SNAPSHOT_THROUGH(drv_str);
 }
 
+float hud_snapshot_bed_power_db(const struct hud_snapshot_view *view)
+{
+    const struct pwhud_snapshot *b = &view->b;
+    uint32_t mask = b->sp_bed_mask & ((1u << PWHUD_BED_MAX) - 1u);
+    double sum = 0.0;
+    unsigned i;
+
+    for (i = 0; i < PWHUD_BED_MAX; i++)
+    {
+        float db = b->sp_bed_db[i];
+
+        /* A publisher at the floor contributes 1e-12 and cannot move this, but a
+         * non-finite one would poison the whole sum, so it is dropped rather
+         * than trusted. */
+        if (!(mask & (1u << i)) || !std::isfinite(db))
+            continue;
+        sum += std::pow(10.0, (double)db / 10.0);
+    }
+    return sum > 0.0 ? (float)(10.0 * std::log10(sum)) : PWHUD_DB_FLOOR;
+}
+
 enum hud_spatial_state hud_snapshot_spatial_state(const struct hud_snapshot_view *view)
 {
     /* An older writer has neither counter, so fall back to the rule that held
@@ -313,11 +335,13 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
             snprintf(dsp, sizeof(dsp), "%.1f%%", 100.0 * (double)a->pw_dsp_load);
         else
             snprintf(dsp, sizeof(dsp), "n/a");
-        /* Which stream section A is about.  Every field on this line except
-         * pw_stream_count and sinkxrun describes one stream, and nothing here used
-         * to say which one, so one stream's peaks read as the whole process's
-         * output.  streams is the process-wide count, showing is the elected
-         * stream inside its period group: the two are different scopes and the
+        /* Which stream the ring, quantum and xrun fields are about.  Every field on
+         * this line except pw_stream_count, sinkxrun and the peaks describes one
+         * stream, and nothing here used to say which one.  The peaks are the group
+         * maximum and are labelled peak(max) below, because metering the elected
+         * stream alone published silence for whole sessions of titles whose audio
+         * played on a sibling.  streams is the process-wide count, showing is the
+         * elected stream inside its period group: different scopes, and the ring
          * ratio only makes sense against the group. */
         if (!hud_snapshot_have_stream_scope(view))
             snprintf(scope, sizeof(scope), "unavailable, writer predates the field");
@@ -348,8 +372,8 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
             for (i = 0; i < a->out_channels && i < PWHUD_OUT_MAX && len > 0 &&
                         len < (int)sizeof(line);
                  i++)
-                len += snprintf(line + len, sizeof(line) - len, "%s%.1f", i ? " " : " peak ",
-                                a->out_peak_db[i]);
+                len += snprintf(line + len, sizeof(line) - len, "%s%.1f",
+                                i ? " " : " peak(max) ", a->out_peak_db[i]);
         else if (len > 0 && len < (int)sizeof(line))
         {
             /* Mirrors the overlay row: none of these is a measurement, and a
@@ -361,7 +385,7 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
             len += snprintf(line + len, sizeof(line) - len, "%s",
                             flags_a & PWHUD_F_CAPTURE        ? " peak n/a on capture"
                             : flags_a & PWHUD_F_OUT_NO_METER ? " peak unmetered"
-                            : !a->drv_held_bytes             ? " peak no data this tick"
+                            : !a->drv_held_bytes             ? " peak(max) no data this tick"
                                                              : " peak unavailable");
         }
         if (hud_snapshot_flags_a(view) & PWHUD_F_OUT_TRUNCATED && len > 0 &&
@@ -462,6 +486,13 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
             if (b->sp_bed_mask & (1u << i))
                 len += snprintf(line + len, sizeof(line) - len, "%s%s %.1f",
                                 printed++ ? " " : " bed ", bed_name(i), b->sp_bed_db[i]);
+        /* Printed after the channels and not before, so a log a user pastes back
+         * carries the twelve numbers and the one figure that says what they add up
+         * to on the bus.  Without it a reader has to redo the power sum by hand to
+         * know whether a bed of quiet-looking rows was loud. */
+        if (len > 0 && len < (int)sizeof(line))
+            len += snprintf(line + len, sizeof(line) - len, " bedsum %.1f",
+                            hud_snapshot_bed_power_db(view));
     }
 
     hud_logf("%s%s", line, view->torn_b ? " TORN, previous copy" : "");

@@ -483,9 +483,11 @@ static void hud_config_rows(const struct hud_layout *l, const struct hud_snapsho
 
     /* Two scopes on one row, kept terse because this row is width-constrained
      * and the long form pushed the overlay past the bounds the present smoke
-     * test asserts.  "4 str  #7/2" is: four streams in this process, and every
-     * other section A number describes stream 7, one of the two started render
-     * streams in its period group.  The id is a monotonic counter and not an
+     * test asserts.  "4 str  #7/2" is: four streams in this process, and the ring,
+     * quantum and xrun numbers describe stream 7, one of the two started render
+     * streams in its period group.  The out meters are the maximum over those two,
+     * not stream 7's own, so a quiet elected stream cannot hide a loud sibling.
+     * The id is a monotonic counter and not an
      * index into that two, hence the #, so it can be the larger number.  The
      * verbose legend below spells this out; the row itself cannot afford to.
      * Unavailable rather than 0 where there is no id, because 0 is not a
@@ -788,6 +790,20 @@ static void hud_bed_rows(const struct hud_layout *l, const struct hud_snapshot_v
         hud_text(HUD_STATE_LIVE, "obj %u/%u", b->sp_dyn_live, b->sp_dyn_max);
     else
         hud_text(HUD_STATE_NA, "obj none");
+
+    /* The number that decides whether the rows below are loud, drawn on the header
+     * rather than as an extra row because it is a property of the set.  Twelve rows
+     * at -18 dBFS look like headroom and are already within 7.2 dB of full scale
+     * once summed, further still if correlated; reading them as quiet is a mistake
+     * this overlay has already caused.  WATCH from -15.5, the point where the sum
+     * started agreeing with real clipping. */
+    if (mask)
+    {
+        float sum = hud_snapshot_bed_power_db(view);
+
+        ImGui::SameLine();
+        hud_text(sum >= -15.5f ? HUD_STATE_WATCH : HUD_STATE_LIVE, "sum %.1f", sum);
+    }
 
     if (l->verbose && hud_snapshot_have_spatial_counts(view))
     {
