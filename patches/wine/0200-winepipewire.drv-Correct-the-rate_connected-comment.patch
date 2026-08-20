@@ -1,0 +1,30 @@
+From c4372a68d169a517eb2583f9b59c7347f934f0a4 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Thu, 20 Aug 2026 16:59:40 +0200
+Subject: [PATCH 200/200] winepipewire.drv: Correct the rate_connected comment.
+
+---
+ dlls/winepipewire.drv/pipewire.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index 75a14a36448..ae5e37c1a63 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -185,7 +185,12 @@ struct pipewire_stream
+      * pointer: the reader is a different process, so an address tells it
+      * nothing and a recycled allocation would alias two streams. */
+     UINT32 hud_id;
+-    UINT32 rate_connected; /* negotiated stream rate; SPA_PROP_rate is absolute vs this */
++    /* Rate this stream connected at, which is the requested rate and not a
++     * read-back: spa_format_audio_raw_build emits a fully fixed pod, so the
++     * adapter inserts a converter rather than counter-proposing, and there is
++     * no param_changed handler that could learn anything else.  SPA_PROP_rate
++     * is a ratio against this. */
++    UINT32 rate_connected;
+     char last_error[128]; /* set on ERROR callback; emitted once from Wine path */
+     BOOL pending_error;
+ 
+-- 
+2.55.0
+

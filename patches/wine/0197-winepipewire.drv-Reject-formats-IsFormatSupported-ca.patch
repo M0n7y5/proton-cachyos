@@ -1,0 +1,88 @@
+From 44ead58d7ac4bebab56205c3e254c7fbb240006c Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Thu, 20 Aug 2026 16:59:40 +0200
+Subject: [PATCH 197/200] winepipewire.drv: Reject formats IsFormatSupported
+ cannot describe to SPA.
+
+---
+ dlls/winepipewire.drv/pipewire.c | 42 ++++++++++++++++++--------------
+ 1 file changed, 24 insertions(+), 18 deletions(-)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index 66a49ecd0bf..b11406e077a 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -2175,21 +2175,6 @@ static NTSTATUS pipewire_get_device_period(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
+-static NTSTATUS pipewire_is_format_supported(void *args)
+-{
+-    struct is_format_supported_params *params = args;
+-
+-    /* Shared-mode format conversion/resampling is the adapter's job, so we
+-     * accept any format here (mirrors winepulse).  Exclusive mode is not
+-     * supported. */
+-    if (params->share == AUDCLNT_SHAREMODE_EXCLUSIVE)
+-        params->result = AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED;
+-    else
+-        params->result = S_OK;
+-
+-    return STATUS_SUCCESS;
+-}
+-
+ /* Synthesize a Windows device path, mirroring winepulse get_device_path.
+  * Most audio devices have no serial number, so substitute the low 8 hex
+  * digits of the endpoint GUID, which mmdevapi derives from the device name
+@@ -2302,9 +2287,8 @@ done:
+  * Format mapping (pulse_spec_from_waveformat transplant)
+  * ---------------------------------------------------------------------- */
+ 
+-static HRESULT pipewire_info_from_waveformat(struct pipewire_stream *stream, const WAVEFORMATEX *fmt)
++static HRESULT pipewire_info_from_waveformat(struct spa_audio_info_raw *info, const WAVEFORMATEX *fmt)
+ {
+-    struct spa_audio_info_raw *info = &stream->info;
+     enum spa_audio_format spafmt = SPA_AUDIO_FORMAT_UNKNOWN;
+     UINT mask = 0, i = 0, j;
+ 
+@@ -2441,6 +2425,28 @@ static HRESULT pipewire_info_from_waveformat(struct pipewire_stream *stream, con
+     return S_OK;
+ }
+ 
++static NTSTATUS pipewire_is_format_supported(void *args)
++{
++    struct is_format_supported_params *params = args;
++    struct spa_audio_info_raw info;
++
++    /* Shared-mode conversion and resampling are the adapter's job, so the only
++     * formats to refuse are the ones this driver cannot describe to SPA at all.
++     * Answering from the same function create_stream uses is what keeps the two
++     * entry points from disagreeing: mmdevapi turns S_FALSE into the
++     * closest-match reply here and into AUDCLNT_E_UNSUPPORTED_FORMAT at
++     * Initialize, so an application that probes and trusts S_OK is not sent
++     * into a failure it cannot see coming.  Exclusive mode is not supported. */
++    if (params->share == AUDCLNT_SHAREMODE_EXCLUSIVE)
++        params->result = AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED;
++    else if (FAILED(pipewire_info_from_waveformat(&info, params->fmt_in)))
++        params->result = S_FALSE;
++    else
++        params->result = S_OK;
++
++    return STATUS_SUCCESS;
++}
++
+ /* ----------------------------------------------------------------------
+  * pw_stream callbacks (foreign thread, loop lock held: no ntdll/TRACE)
+  * ---------------------------------------------------------------------- */
+@@ -3282,7 +3288,7 @@ static NTSTATUS pipewire_create_stream(void *args)
+     for (i = 0; i < ARRAY_SIZE(stream->vol); ++i)
+         stream->vol[i] = 1.f;
+ 
+-    hr = pipewire_info_from_waveformat(stream, params->fmt);
++    hr = pipewire_info_from_waveformat(&stream->info, params->fmt);
+     TRACE("Obtaining format returns %08x\n", (unsigned)hr);
+     if (FAILED(hr))
+         goto exit;
+-- 
+2.55.0
+
