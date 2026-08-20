@@ -102,8 +102,11 @@ bool hud_snapshot_have_stream_meters(const struct hud_snapshot_view *view);
  * the honest one, and the threshold below is calibrated to it rather than
  * derived: on the CP2077 capture, this figure at or above -15.5 dBFS agreed
  * with clipping on 91.9% of buckets, catching 63 of 83 clipping buckets against
- * 18 false positives in 384 calm ones.  Returns PWHUD_DB_FLOOR when nothing is
- * present. */
+ * 18 false positives in 384 calm ones.  It then held on an independent session
+ * of the same title with no retuning, 90.1% agreement over 1156 publish
+ * intervals: 79.9% of intervals at or above the threshold clipped against 8.3%
+ * below it.  Do not retune it against a third capture without beating both.
+ * Returns PWHUD_DB_FLOOR when nothing is present. */
 float hud_snapshot_bed_power_db(const struct hud_snapshot_view *view);
 C_ASSERT(HUD_SNAPSHOT_THROUGH(drv_str) == PWHUD_SIZE_V1_STR);
 
