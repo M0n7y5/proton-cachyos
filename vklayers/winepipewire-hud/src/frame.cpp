@@ -349,6 +349,20 @@ static void hud_history_update(struct hud_frame_state *st, const struct hud_snap
                 st->bed_hold_ns[i] = hud_mono_ns();
             }
         }
+
+        /* Only growth is truncation happening now.  A new elected stream
+         * restarts its own totals, so the value can fall; that clears the
+         * timestamp rather than setting it, exactly as the section A counters
+         * treat a released stream, and for the same reason: after the drop we
+         * no longer know when the remaining total was earned. */
+        if (hud_snapshot_have_clip_stats(view))
+        {
+            if (st->clip_last && b->sp_clip_samples > st->clip_last)
+                st->clip_ns = hud_mono_ns();
+            else if (b->sp_clip_samples < st->clip_last)
+                st->clip_ns = 0;
+            st->clip_last = b->sp_clip_samples;
+        }
     }
 
     if (!view->have_a || !a->clock_ns || a->clock_ns == st->last_clock_ns)
@@ -782,6 +796,48 @@ static void hud_bed_rows(const struct hud_layout *l, const struct hud_snapshot_v
          * counts publishes by the one elected to write the bed.  The pair separates
          * a spatial stream that merely exists from a mixer that is running. */
         hud_text(HUD_STATE_LIVE, "%u client(s), %u mixes", b->sp_clients, b->sp_publishes);
+    }
+
+    /* The clip is the only stage in our mixer that changes samples
+     * irreversibly, so it gets its own row rather than a corner of the bed
+     * line.  Drawn whenever the clip has run, bed or no bed: a title with a
+     * dynamic-object budget and no bed at all can still truncate.
+     *
+     * FAULT only while it is still growing.  A cumulative percentage that
+     * stopped moving ten minutes ago is history, and painting history in the
+     * fault colour is how a reader learns to ignore the colour. */
+    if (hud_snapshot_have_clip_stats(view))
+    {
+        double pct = b->sp_clip_total
+                         ? 100.0 * (double)b->sp_clip_samples / (double)b->sp_clip_total
+                         : 0.0;
+        uint64_t now = hud_mono_ns();
+        bool moving = st->clip_ns && now > st->clip_ns && now - st->clip_ns < HUD_RECENT_NS;
+        enum hud_state state = !b->sp_clip_samples ? HUD_STATE_LIVE
+                               : moving            ? HUD_STATE_FAULT
+                                                   : HUD_STATE_WATCH;
+
+        if (!b->sp_clip_samples)
+            hud_text(state, "clip  none, %u pass(es) on the bus", b->sp_bus_passes);
+        else if (l->verbose)
+            /* Both ratios, because they answer different questions: the sample
+             * share is how much of the signal was altered, the pass share is
+             * how often it happened, and a title can be high in one and low in
+             * the other.  Peak is dB above full scale, so it sizes the gain a
+             * limiter would have needed. */
+            hud_text(state, "clip  %.3f%% smp, %.1f%% pass, %u eng, peak +%.1f dB", pct,
+                     100.0 * (double)b->sp_clip_passes / (double)b->sp_bus_passes,
+                     b->sp_clip_engagements, b->sp_clip_peak_db);
+        else
+            hud_text(state, "clip  %.2f%%, peak +%.1f dB", pct, b->sp_clip_peak_db);
+
+        /* Never folded into the clip count: a NaN is a different fault with a
+         * different cause, and it is always worth saying out loud. */
+        if (b->sp_clip_nonfinite)
+        {
+            ImGui::SameLine();
+            hud_text(HUD_STATE_FAULT, "NONFINITE %u", b->sp_clip_nonfinite);
+        }
     }
 
     if (!mask)

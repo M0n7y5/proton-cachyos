@@ -59,6 +59,12 @@ struct hud_frame_state
     uint32_t last_seq_sp;
     float bed_hold[PWHUD_BED_MAX];
     uint64_t bed_hold_ns[PWHUD_BED_MAX];
+    /* The clip total as of the last section B publish, and when it last grew.
+     * A cumulative total cannot say whether truncation is happening now, which
+     * is the only question a listener has, so the row needs the edge and not
+     * just the value.  Section B's own sequence gates it, as the holds above. */
+    uint64_t clip_last;
+    uint64_t clip_ns;
     float out_hold[PWHUD_OUT_MAX];
     uint64_t out_hold_ns[PWHUD_OUT_MAX];
     uint32_t str_hold_id[PWHUD_STR_MAX];

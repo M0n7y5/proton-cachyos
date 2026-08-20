@@ -245,6 +245,15 @@ bool hud_snapshot_have_spatial_counts(const struct hud_snapshot_view *view)
     return view->have_b && view->b.size >= HUD_SNAPSHOT_THROUGH(sp_publishes);
 }
 
+/* Gated on the counters existing AND on the clip having run, because a stream
+ * whose bus never carried anything has no denominator and a "0.000%" drawn for
+ * it would read as a measurement instead of an absence. */
+bool hud_snapshot_have_clip_stats(const struct hud_snapshot_view *view)
+{
+    return view->have_b && view->b.size >= HUD_SNAPSHOT_THROUGH(sp_clip_peak_db) &&
+           view->b.sp_bus_passes != 0;
+}
+
 bool hud_snapshot_have_stream_meters(const struct hud_snapshot_view *view)
 {
     return view->have_a && view->a.size >= HUD_SNAPSHOT_THROUGH(drv_str);
@@ -431,6 +440,17 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
                    b->seq_sp / 2, counts, b->sp_hrtf, b->sp_bed_virtualized, b->sp_dyn_live,
                    b->sp_dyn_max, b->sp_bed_mask,
                    hud_snapshot_flags_b(view) & PWHUD_F_BED_TRUNCATED ? ",bedtrunc" : "");
+
+    /* Every field, unconditionally once the writer has them, because this log is
+     * what a user sends back and a ratio without its two numerators is not
+     * re-derivable from it. */
+    if (hud_snapshot_have_clip_stats(view) && len > 0 && len < (int)sizeof(line))
+        len += snprintf(line + len, sizeof(line) - len,
+                        " clip %llu/%llu smp %u/%u pass %u eng peak %+.2f dB nonfinite %u",
+                        (unsigned long long)b->sp_clip_samples,
+                        (unsigned long long)b->sp_clip_total, b->sp_clip_passes,
+                        b->sp_bus_passes, b->sp_clip_engagements, b->sp_clip_peak_db,
+                        b->sp_clip_nonfinite);
 
     if (!b->sp_bed_mask)
         len += snprintf(line + len, sizeof(line) - len, " no bed channels");
