@@ -1,0 +1,131 @@
+From 92329ad827ac2343b98c9d6d85df11d82c814e10 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Thu, 20 Aug 2026 14:02:34 +0200
+Subject: [PATCH] winepipewire.drv: Meter the whole period group in the HUD
+ output peaks.
+
+---
+ dlls/winepipewire.drv/pipewire.c         | 55 +++++++++++++++---------
+ dlls/winepipewire.drv/winepipewire_hud.h | 17 ++++++--
+ 2 files changed, 49 insertions(+), 23 deletions(-)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index de09d59a18f..66a49ecd0bf 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -3913,11 +3913,17 @@ static void pipewire_period_timer_loop(void *args)
+         INT64 adjust = 0;
+         UINT64 mono_ns = 0;
+         int have_now = 0, have_time = 0;
+-        float hud_peak[PWHUD_OUT_MAX] = { 0.0f };
++        float hud_peak[PWHUD_OUT_MAX];
+         struct pwhud_str hud_str[PWHUD_STR_MAX];
+-        UINT32 hud_channels = 0, hud_out_flags = 0, hud_str_count = 0;
++        UINT32 hud_channels = 0, hud_out_flags = 0, hud_str_count = 0, hud_seed;
+         BOOL hud_publishing = FALSE;
+ 
++        /* The floor and not zero, which is 0 dBFS: these are decibels and the group
++         * fold keeps the larger value, so a zeroed seed would out-rank every real
++         * level and publish full scale on silence. */
++        for (hud_seed = 0; hud_seed < PWHUD_OUT_MAX; hud_seed++)
++            hud_peak[hud_seed] = PWHUD_DB_FLOOR;
++
+         NtDelayExecution(FALSE, &delay);
+ 
+         pw_thread_loop_lock(pw_loop_global);
+@@ -4033,30 +4039,39 @@ static void pipewire_period_timer_loop(void *args)
+ 
+                 if (hud_publishing)
+                 {
++                    UINT32 str_flags = 0, ch, c;
++                    float spill[PWHUD_OUT_MAX];
++                    float *dst = spill;
++
+                     if (hud_str_count < PWHUD_STR_MAX)
+                     {
+-                        UINT32 str_flags = 0, c;
+-
+                         hud_str[hud_str_count].id = stream->hud_id;
+-                        hud_str[hud_str_count].channels =
+-                            hud_render_peaks(stream, hud_str[hud_str_count].peak_db, &str_flags);
+-                        for (c = hud_str[hud_str_count].channels; c < PWHUD_OUT_MAX; c++)
+-                            hud_str[hud_str_count].peak_db[c] = PWHUD_DB_FLOOR;
+-                        if (stream == period->timer_stream)
+-                        {
+-                            hud_channels = hud_str[hud_str_count].channels;
+-                            hud_out_flags |= str_flags;
+-                            for (c = 0; c < PWHUD_OUT_MAX; c++)
+-                                hud_peak[c] = hud_str[hud_str_count].peak_db[c];
+-                        }
+-                        hud_str_count++;
++                        dst = hud_str[hud_str_count].peak_db;
+                     }
+                     else
+-                    {
+                         hud_out_flags |= PWHUD_F_STR_TRUNCATED;
+-                        if (stream == period->timer_stream)
+-                            hud_channels = hud_render_peaks(stream, hud_peak, &hud_out_flags);
+-                    }
++
++                    ch = hud_render_peaks(stream, dst, &str_flags);
++                    for (c = ch; c < PWHUD_OUT_MAX; c++)
++                        dst[c] = PWHUD_DB_FLOOR;
++                    if (hud_str_count < PWHUD_STR_MAX)
++                        hud_str[hud_str_count++].channels = ch;
++
++                    /* Section A carries the loudest of the group rather than the
++                     * elected stream's own level.  Metering one member and
++                     * publishing it as the driver is how a title whose elected
++                     * stream is permanently silent reads as silent for a whole
++                     * session: CP2077 published -120.0 dBFS on 351 of 351 samples
++                     * with every bit of its audio on the sibling stream.  Per
++                     * stream truth stays exact in drv_str[], and the max costs
++                     * nothing because each started render stream is already
++                     * scanned right here. */
++                    for (c = 0; c < ch; c++)
++                        if (dst[c] > hud_peak[c])
++                            hud_peak[c] = dst[c];
++                    if (ch > hud_channels)
++                        hud_channels = ch;
++                    hud_out_flags |= str_flags;
+                 }
+ 
+                 stream->lcl_offs_bytes += adv;
+diff --git a/dlls/winepipewire.drv/winepipewire_hud.h b/dlls/winepipewire.drv/winepipewire_hud.h
+index fb8515637f2..a2514560aa7 100644
+--- a/dlls/winepipewire.drv/winepipewire_hud.h
++++ b/dlls/winepipewire.drv/winepipewire_hud.h
+@@ -62,6 +62,17 @@
+  * the negotiated PipeWire format, not spatial bed channels: those are
+  * sp_bed_db[PWHUD_BED_MAX], written by the other publisher.
+  *
++ * out_peak_db is the per-channel MAXIMUM over every started render stream in
++ * the elected period group, not the elected stream's own level, and
++ * out_channels is the widest metered count among them.  It used to be the
++ * elected stream alone, which published silence for entire sessions: a title
++ * whose elected stream is permanently quiet read -120.0 dBFS while all of its
++ * audio played on a sibling in the same group.  Per stream levels are exact in
++ * drv_str[], so nothing is lost by aggregating here.  A consequence for
++ * readers: PWHUD_F_OUT_NO_METER and PWHUD_F_OUT_TRUNCATED are now the OR over
++ * that set, so either bit means at least one stream is affected and the
++ * maximum may understate the group, not that the number shown is unusable.
++ *
+  * 8 is chosen, not assumed.  It covers stereo through 7.1, which is every
+  * endpoint that occurs here, and the scan is O(frames x channels) so raising
+  * it would double the worst-case tick cost for a configuration nobody has.
+@@ -258,9 +269,9 @@ struct pwhud_snapshot
+     uint32_t sp_clients;
+     uint32_t sp_publishes;
+ 
+-    /* Per-stream meters, section A.  out_peak_db stays the elected stream so
+-     * existing readers are unchanged.  Only the elected group's started
+-     * render streams; other groups are outside this writer. */
++    /* Per-stream meters, section A, and the exact levels behind the group
++     * maximum in out_peak_db.  Only the elected group's started render
++     * streams; other groups are outside this writer. */
+     uint32_t drv_str_count;
+     uint32_t drv_str_pad;        /* keeps drv_str 8-aligned; unused */
+     struct pwhud_str drv_str[PWHUD_STR_MAX];
+-- 
+2.55.0
+
