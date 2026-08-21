@@ -1,0 +1,47 @@
+From ecfd38dad927a81df23b3023313484506369ff68 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 01:05:01 +0200
+Subject: [PATCH] mmdevapi: Allow enabling DualSense haptic discovery from the
+ environment.
+
+---
+ dlls/mmdevapi/devenum.c | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/mmdevapi/devenum.c b/dlls/mmdevapi/devenum.c
+index 6dd3b9dd75a..f242d082cce 100644
+--- a/dlls/mmdevapi/devenum.c
++++ b/dlls/mmdevapi/devenum.c
+@@ -613,19 +613,26 @@ static const PROPERTYKEY devicepath_key = {
+     {0xb3f8fa53, 0x0004, 0x438e, {0x90, 0x03, 0x51, 0xa4, 0x6e, 0x13, 0x9b, 0xfc}}, 2
+ };
+ 
+-/* Opt-in through HKCU\Software\Wine\mmdevapi DualSenseHaptics, a nonzero DWORD.
++/* Opt-in through the WINE_DUALSENSE_HAPTICS environment variable, exactly "1" like this
++ * fork's other environment toggles so "true" and "yes" do not enable it, or failing that
++ * HKCU\Software\Wine\mmdevapi DualSenseHaptics, a nonzero DWORD.  Steam sets environment
++ * variables per game, while the registry lives in a per-game Proton prefix.
+  * Read once: unset costs one failed registry read and changes nothing. */
+ static BOOL dualsense_haptics_enabled(void)
+ {
+     static int enabled = -1;
+-    DWORD size, type, value;
++    DWORD len, size, type, value;
++    WCHAR buf[8];
+     HKEY key;
+ 
+     if (enabled != -1)
+         return enabled;
+ 
+     enabled = 0;
+-    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\mmdevapi", 0, KEY_READ, &key))
++    len = GetEnvironmentVariableW(L"WINE_DUALSENSE_HAPTICS", buf, ARRAY_SIZE(buf));
++    if (len && len < ARRAY_SIZE(buf) && !wcscmp(buf, L"1"))
++        enabled = 1;
++    else if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\mmdevapi", 0, KEY_READ, &key))
+     {
+         size = sizeof(value);
+         if (!RegQueryValueExW(key, L"DualSenseHaptics", NULL, &type, (BYTE *)&value, &size) && type == REG_DWORD)
+-- 
+2.55.0
+
