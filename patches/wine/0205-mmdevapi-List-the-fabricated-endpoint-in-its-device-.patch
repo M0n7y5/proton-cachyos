@@ -1,0 +1,56 @@
+From d992697cd1ce1940beea1663c1914e1b2d42ed9b Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 23:20:01 +0200
+Subject: [PATCH 205/206] mmdevapi: List the fabricated endpoint in its device
+ container.
+
+---
+ dlls/mmdevapi/devenum.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/dlls/mmdevapi/devenum.c b/dlls/mmdevapi/devenum.c
+index 3bf12b59851..4e74dd09204 100644
+--- a/dlls/mmdevapi/devenum.c
++++ b/dlls/mmdevapi/devenum.c
+@@ -636,6 +636,29 @@ static BOOL dualsense_haptics_enabled(void)
+     return enabled;
+ }
+ 
++/* Windows lists every devnode of a device container under DeviceContainers, which is
++ * how a game walks from a controller to the audio endpoint that shares its container.
++ * Nothing in Wine maintains that list. */
++static void register_endpoint_container(const WCHAR *instance_id, const WCHAR *container_str)
++{
++    /* len of the key path with both container strings and nul */
++    WCHAR path[143];
++    HKEY key;
++
++    swprintf(path, ARRAY_SIZE(path),
++             L"System\\CurrentControlSet\\Control\\DeviceContainers\\%s\\BaseContainers\\%s",
++             container_str, container_str);
++
++    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, path, 0, NULL, 0, KEY_WRITE|KEY_WOW64_64KEY, NULL, &key, NULL))
++    {
++        WARN("Creating %s failed\n", debugstr_w(path));
++        return;
++    }
++
++    RegSetValueExW(key, instance_id, 0, REG_NONE, NULL, 0);
++    RegCloseKey(key);
++}
++
+ /* len of SWD\MMDEVAPI\{0.0.x.00000000}.{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx} and nul */
+ #define ENDPOINT_INSTANCE_ID_LEN 69
+ 
+@@ -713,6 +736,8 @@ static void register_endpoint_devnode(GUID *id, EDataFlow flow, const WCHAR *gui
+         if (!SetupDiCreateDeviceInterfaceW(set, &device, flow == eRender ? &DEVINTERFACE_AUDIO_RENDER
+                                            : &DEVINTERFACE_AUDIO_CAPTURE, NULL, 0, &iface))
+             WARN("SetupDiCreateDeviceInterfaceW failed: %lu\n", GetLastError());
++
++        register_endpoint_container(instance_id, container_str);
+     }
+ 
+     SetupDiDestroyDeviceInfoList(set);
+-- 
+2.55.0
+

@@ -1,0 +1,182 @@
+From 068bb426a1d9186d6c9dc00a726d0748172b89ec Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 23:18:28 +0200
+Subject: [PATCH 204/206] mmdevapi: Register USB audio endpoints as PnP devices
+ for controller haptic discovery.
+
+---
+ dlls/mmdevapi/Makefile.in |   2 +-
+ dlls/mmdevapi/devenum.c   | 123 ++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 120 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/mmdevapi/Makefile.in b/dlls/mmdevapi/Makefile.in
+index 37339a42d74..d4bbb1ac2d2 100644
+--- a/dlls/mmdevapi/Makefile.in
++++ b/dlls/mmdevapi/Makefile.in
+@@ -1,7 +1,7 @@
+ MODULE    = mmdevapi.dll
+ UNIXLIB   = mmdevapi.so
+ IMPORTS   = ole32 oleaut32 user32 advapi32 version
+-DELAYIMPORTS = winmm
++DELAYIMPORTS = winmm setupapi
+ UNIX_LIBS = $(PTHREAD_LIBS)
+ 
+ SOURCES = \
+diff --git a/dlls/mmdevapi/devenum.c b/dlls/mmdevapi/devenum.c
+index 7fd518de0f6..3bf12b59851 100644
+--- a/dlls/mmdevapi/devenum.c
++++ b/dlls/mmdevapi/devenum.c
+@@ -36,6 +36,7 @@
+ #include "endpointvolume.h"
+ #include "audiopolicy.h"
+ #include "spatialaudioclient.h"
++#include "setupapi.h"
+ 
+ #include "mmdevapi_private.h"
+ #include "devpkey.h"
+@@ -607,6 +608,121 @@ static const WCHAR *find_product_name_override(const WCHAR *device_id)
+     return NULL;
+ }
+ 
++/* {b3f8fa53-0004-438e-9003-51a46e139bfc},2 carries the endpoint's bus device path. */
++static const PROPERTYKEY devicepath_key = {
++    {0xb3f8fa53, 0x0004, 0x438e, {0x90, 0x03, 0x51, 0xa4, 0x6e, 0x13, 0x9b, 0xfc}}, 2
++};
++
++/* Opt-in through HKCU\Software\Wine\mmdevapi DualSenseHaptics, a nonzero DWORD.
++ * Read once: unset costs one failed registry read and changes nothing. */
++static BOOL dualsense_haptics_enabled(void)
++{
++    static int enabled = -1;
++    DWORD size, type, value;
++    HKEY key;
++
++    if (enabled != -1)
++        return enabled;
++
++    enabled = 0;
++    if (!RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\mmdevapi", 0, KEY_READ, &key))
++    {
++        size = sizeof(value);
++        if (!RegQueryValueExW(key, L"DualSenseHaptics", NULL, &type, (BYTE *)&value, &size) && type == REG_DWORD)
++            enabled = !!value;
++        RegCloseKey(key);
++    }
++
++    return enabled;
++}
++
++/* len of SWD\MMDEVAPI\{0.0.x.00000000}.{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx} and nul */
++#define ENDPOINT_INSTANCE_ID_LEN 69
++
++/* A game that pairs a controller with its USB audio endpoint (libScePad) looks the
++ * endpoint up through PnP and matches container ids. Wine has no AudioEndpoint driver
++ * to register one, and a skeleton pnp driver could not name it, so fabricate the
++ * devnode here. USB endpoints only: nothing else is ever asked for by container. */
++static void register_endpoint_devnode(GUID *id, EDataFlow flow, const WCHAR *guidstr)
++{
++    static const GUID audio_endpoint_class = {0xc166523c,0xfe0c,0x4a94,{0xa5,0x86,0xf1,0xa8,0x0c,0xfb,0xbf,0x3e}};
++    SP_DEVICE_INTERFACE_DATA iface = { sizeof(iface) };
++    SP_DEVINFO_DATA device = { sizeof(device) };
++    WCHAR instance_id[ENDPOINT_INSTANCE_ID_LEN];
++    WCHAR class_key[78], class_str[39], container_str[39];
++    PROPVARIANT path, container, name;
++    HDEVINFO set;
++    HKEY key;
++
++    PropVariantInit(&path);
++    PropVariantInit(&container);
++    PropVariantInit(&name);
++
++    if (FAILED(MMDevice_GetPropValue(id, flow, &devicepath_key, &path)) || path.vt != VT_LPWSTR
++            || !wcsstr(path.pwszVal, L"USB\\VID_"))
++        goto done;
++
++    if (FAILED(MMDevice_GetPropValue(id, flow, (const PROPERTYKEY *)&DEVPKEY_Device_ContainerId, &container))
++            || container.vt != VT_CLSID || IsEqualGUID(container.puuid, &GUID_NULL))
++        goto done;
++
++    if (FAILED(MMDevice_GetPropValue(id, flow, (const PROPERTYKEY *)&DEVPKEY_Device_FriendlyName, &name))
++            || name.vt != VT_LPWSTR)
++        goto done;
++
++    StringFromGUID2(&audio_endpoint_class, class_str, ARRAY_SIZE(class_str));
++    swprintf(class_key, ARRAY_SIZE(class_key), L"System\\CurrentControlSet\\Control\\Class\\%s", class_str);
++    if (!RegCreateKeyExW(HKEY_LOCAL_MACHINE, class_key, 0, NULL, 0, KEY_WRITE|KEY_WOW64_64KEY, NULL, &key, NULL))
++    {
++        /* setupapi names the class of a new devnode from this key */
++        RegSetValueExW(key, L"Class", 0, REG_SZ, (const BYTE *)L"AudioEndpoint", sizeof(L"AudioEndpoint"));
++        RegCloseKey(key);
++    }
++
++    StringFromGUID2(container.puuid, container_str, ARRAY_SIZE(container_str));
++    swprintf(instance_id, ARRAY_SIZE(instance_id), L"SWD\\MMDEVAPI\\{0.0.%u.00000000}.%s", flow, guidstr);
++
++    if (!(set = SetupDiCreateDeviceInfoList(&audio_endpoint_class, NULL)))
++    {
++        WARN("SetupDiCreateDeviceInfoList failed: %lu\n", GetLastError());
++        goto done;
++    }
++
++    if (!SetupDiCreateDeviceInfoW(set, instance_id, &audio_endpoint_class, name.pwszVal, NULL, 0, &device)
++            && !(GetLastError() == ERROR_DEVINST_ALREADY_EXISTS
++                 && SetupDiOpenDeviceInfoW(set, instance_id, NULL, 0, &device)))
++        WARN("Creating devnode %s failed: %lu\n", debugstr_w(instance_id), GetLastError());
++    else
++    {
++        TRACE("Registering %s with container %s\n", debugstr_w(instance_id), debugstr_w(container_str));
++
++        if (!SetupDiRegisterDeviceInfo(set, &device, 0, NULL, NULL, NULL))
++            WARN("SetupDiRegisterDeviceInfo failed: %lu\n", GetLastError());
++
++        if ((key = SetupDiCreateDevRegKeyW(set, &device, DICS_FLAG_GLOBAL, 0, DIREG_DRV, NULL, NULL)) != INVALID_HANDLE_VALUE)
++            RegCloseKey(key);
++
++        if (!SetupDiSetDeviceRegistryPropertyW(set, &device, SPDRP_BASE_CONTAINERID,
++                                               (const BYTE *)container_str, sizeof(container_str)))
++            WARN("Setting the container id failed: %lu\n", GetLastError());
++
++        if (!SetupDiSetDeviceRegistryPropertyW(set, &device, SPDRP_FRIENDLYNAME, (const BYTE *)name.pwszVal,
++                                               (wcslen(name.pwszVal) + 1) * sizeof(WCHAR)))
++            WARN("Setting the friendly name failed: %lu\n", GetLastError());
++
++        if (!SetupDiCreateDeviceInterfaceW(set, &device, flow == eRender ? &DEVINTERFACE_AUDIO_RENDER
++                                           : &DEVINTERFACE_AUDIO_CAPTURE, NULL, 0, &iface))
++            WARN("SetupDiCreateDeviceInterfaceW failed: %lu\n", GetLastError());
++    }
++
++    SetupDiDestroyDeviceInfoList(set);
++
++done:
++    PropVariantClear(&path);
++    PropVariantClear(&container);
++    PropVariantClear(&name);
++}
++
+ /* Creates or updates the state of a device
+  * If GUID is null, a random guid will be assigned
+  * and the device will be created
+@@ -621,10 +737,6 @@ static MMDevice *MMDevice_Create(const WCHAR *name, GUID *id, EDataFlow flow, DW
+         {0x233164c8, 0x1b2c, 0x4c7d, {0xbc, 0x68, 0xb6, 0x71, 0x68, 0x7a, 0x25, 0x67}}, 1
+     };
+ 
+-    static const PROPERTYKEY devicepath_key = {
+-        {0xb3f8fa53, 0x0004, 0x438e, {0x90, 0x03, 0x51, 0xa4, 0x6e, 0x13, 0x9b, 0xfc}}, 2
+-    };
+-
+     LIST_FOR_EACH_ENTRY(device, &device_list, MMDevice, entry)
+     {
+         if (device->flow == flow && IsEqualGUID(&device->devguid, id)){
+@@ -730,6 +842,9 @@ static MMDevice *MMDevice_Create(const WCHAR *name, GUID *id, EDataFlow flow, DW
+ 
+             MMDevice_SetPropValue(id, flow, (const PROPERTYKEY*)&DEVPKEY_Device_Driver, &pv);
+ 
++            if (state == DEVICE_STATE_ACTIVE && dualsense_haptics_enabled())
++                register_endpoint_devnode(id, flow, guidstr);
++
+             RegCloseKey(keyprop);
+         }
+         RegCloseKey(key);
+-- 
+2.55.0
+

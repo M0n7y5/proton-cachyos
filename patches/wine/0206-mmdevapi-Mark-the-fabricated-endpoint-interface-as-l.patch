@@ -1,0 +1,73 @@
+From 7be357f120c1fac596109b5f13bfd15c96bb5fe3 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 23:26:39 +0200
+Subject: [PATCH 206/206] mmdevapi: Mark the fabricated endpoint interface as
+ linked.
+
+---
+ dlls/mmdevapi/devenum.c | 42 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/dlls/mmdevapi/devenum.c b/dlls/mmdevapi/devenum.c
+index 4e74dd09204..6dd3b9dd75a 100644
+--- a/dlls/mmdevapi/devenum.c
++++ b/dlls/mmdevapi/devenum.c
+@@ -659,6 +659,45 @@ static void register_endpoint_container(const WCHAR *instance_id, const WCHAR *c
+     RegCloseKey(key);
+ }
+ 
++/* A driver would enable its interface with IoSetDeviceInterfaceState. Without the
++ * Linked flag a DIGCF_PRESENT walk does not just skip the interface, it deletes the
++ * devnode behind it (setupapi SETUPDI_EnumerateMatchingDeviceInterfaces). Volatile,
++ * like the flag ntoskrnl writes, so no PnP state outlives the session. */
++static void link_endpoint_interface(HDEVINFO set, SP_DEVICE_INTERFACE_DATA *iface, const GUID *class)
++{
++    char buffer[offsetof(SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath[MAX_PATH])];
++    SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail = (SP_DEVICE_INTERFACE_DETAIL_DATA_W *)buffer;
++    const DWORD linked = 1;
++    WCHAR path[MAX_PATH], class_str[39], *symlink;
++    HKEY key;
++
++    detail->cbSize = sizeof(*detail);
++    if (!SetupDiGetDeviceInterfaceDetailW(set, iface, detail, sizeof(buffer), NULL, NULL))
++    {
++        WARN("SetupDiGetDeviceInterfaceDetailW failed: %lu\n", GetLastError());
++        return;
++    }
++
++    /* setupapi keys the interface off its symbolic link with the first, second and
++     * fourth character replaced by '#' */
++    symlink = detail->DevicePath;
++    symlink[0] = symlink[1] = symlink[3] = '#';
++
++    StringFromGUID2(class, class_str, ARRAY_SIZE(class_str));
++    swprintf(path, ARRAY_SIZE(path), L"System\\CurrentControlSet\\Control\\DeviceClasses\\%s\\%s\\#\\Control",
++             class_str, symlink);
++
++    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, path, 0, NULL, REG_OPTION_VOLATILE,
++                        KEY_WRITE|KEY_WOW64_64KEY, NULL, &key, NULL))
++    {
++        WARN("Creating %s failed\n", debugstr_w(path));
++        return;
++    }
++
++    RegSetValueExW(key, L"Linked", 0, REG_DWORD, (const BYTE *)&linked, sizeof(linked));
++    RegCloseKey(key);
++}
++
+ /* len of SWD\MMDEVAPI\{0.0.x.00000000}.{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx} and nul */
+ #define ENDPOINT_INSTANCE_ID_LEN 69
+ 
+@@ -736,6 +775,9 @@ static void register_endpoint_devnode(GUID *id, EDataFlow flow, const WCHAR *gui
+         if (!SetupDiCreateDeviceInterfaceW(set, &device, flow == eRender ? &DEVINTERFACE_AUDIO_RENDER
+                                            : &DEVINTERFACE_AUDIO_CAPTURE, NULL, 0, &iface))
+             WARN("SetupDiCreateDeviceInterfaceW failed: %lu\n", GetLastError());
++        else
++            link_endpoint_interface(set, &iface, flow == eRender ? &DEVINTERFACE_AUDIO_RENDER
++                                    : &DEVINTERFACE_AUDIO_CAPTURE);
+ 
+         register_endpoint_container(instance_id, container_str);
+     }
+-- 
+2.55.0
+

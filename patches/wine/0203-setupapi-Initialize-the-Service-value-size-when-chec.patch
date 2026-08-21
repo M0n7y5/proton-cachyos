@@ -1,0 +1,25 @@
+From ab276ac91c3f19e06a3effde5092cc1b8b1ac328 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 23:02:01 +0200
+Subject: [PATCH 203/206] setupapi: Initialize the Service value size when
+ checking for winehid devices.
+
+---
+ dlls/setupapi/devinst.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/dlls/setupapi/devinst.c b/dlls/setupapi/devinst.c
+index b860d72b16f..f0f3e063658 100644
+--- a/dlls/setupapi/devinst.c
++++ b/dlls/setupapi/devinst.c
+@@ -2131,6 +2131,7 @@ static BOOL is_device_instance_linked(HKEY subKey, HKEY interfacesKey, const WCH
+     WCHAR alt_devinstance[MAX_DEVICE_ID_LEN];
+     WCHAR service[40];
+ 
++    len = sizeof(service);
+     l = RegQueryValueExW(subKey, L"Service", NULL, &type, (BYTE *)service, &len);
+     if (!l && type == REG_SZ && !wcsicmp(service, L"winehid") && !wcsstr(deviceInstance, L"HID\\"))
+     {
+-- 
+2.55.0
+
