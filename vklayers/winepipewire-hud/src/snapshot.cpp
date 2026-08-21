@@ -311,7 +311,7 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
     enum hud_spatial_state spatial = hud_snapshot_spatial_state(view);
     uint64_t now = hud_mono_ns();
     char flags[48];
-    char counts[40];
+    char counts[48];
     char line[512];
     int len;
     unsigned i;
@@ -455,9 +455,10 @@ void hud_snapshot_log(const struct hud_snapshot_view *view)
      * assertion available that the seqlock discipline is working, and it sits in
      * the log where such a bug would first show.  Do not delete one as redundant. */
     if (hud_snapshot_have_spatial_counts(view))
-        snprintf(counts, sizeof(counts), "clients %u mixes %u", b->sp_clients, b->sp_publishes);
+        snprintf(counts, sizeof(counts), "clients %u publishes %u", b->sp_clients,
+                 b->sp_publishes);
     else
-        snprintf(counts, sizeof(counts), "clients n/a mixes n/a");
+        snprintf(counts, sizeof(counts), "clients n/a publishes n/a");
 
     len = snprintf(line, sizeof(line),
                    "spatial seq %u %s hrtf %u bedvirt %u dyn %u/%u mask 0x%04x%s",

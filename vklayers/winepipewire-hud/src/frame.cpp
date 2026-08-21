@@ -808,10 +808,12 @@ static void hud_bed_rows(const struct hud_layout *l, const struct hud_snapshot_v
     if (l->verbose && hud_snapshot_have_spatial_counts(view))
     {
         ImGui::SameLine();
-        /* clients counts activations, stamped by every activating stream; mixes
-         * counts publishes by the one elected to write the bed.  The pair separates
-         * a spatial stream that merely exists from a mixer that is running. */
-        hud_text(HUD_STATE_LIVE, "%u client(s), %u mixes", b->sp_clients, b->sp_publishes);
+        /* clients counts activations, stamped by every activating stream;
+         * publishes counts snapshot publishes by the one elected to write the
+         * bed, which is one per eleven mix passes, not one per mix.  The pair
+         * separates a spatial stream that merely exists from a mixer that is
+         * running. */
+        hud_text(HUD_STATE_LIVE, "%u client(s), %u publishes", b->sp_clients, b->sp_publishes);
     }
 
     /* The clip is the only stage in our mixer that changes samples
