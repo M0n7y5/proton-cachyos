@@ -392,22 +392,14 @@ static void hud_history_update(struct hud_frame_state *st, const struct hud_snap
     counters[4] = a->drv_ring_resyncs;
     for (i = 0; i < HUD_COUNTERS; i++)
     {
-        /* The first publish only records where the counters already stood: it
-         * says nothing about when they got there.
-         *
-         * Only an increase is a fault happening now.  These totals are summed
-         * over the driver's live streams (pipewire.c:3768-3774), so a released
-         * stream takes its history out of the total and the number goes down: a
-         * real session stepped 9 to 5 across an orderly teardown.  Stamping on
-         * any change painted that decrease in the fault colour for three seconds
-         * and told the reader underruns were happening at the one moment they
-         * demonstrably were not.
-         *
-         * A decrease clears the timestamp instead of setting it.  That is not a
-         * second mechanism: it is the same "nonzero but not seen to move" state
-         * the row already uses before any change is observed, and it is the
-         * truthful one, because after a stream leaves we no longer know when the
-         * remaining streams' faults happened. */
+        /* The first publish only records where the counters stood, so it cannot
+         * time them.  Only an increase is a fault happening now: these totals are
+         * summed over the driver's live streams (pipewire.c:3768-3774), so an
+         * orderly teardown takes a departing stream's history out of the total and
+         * the number falls.  A decrease therefore clears the timestamp rather than
+         * setting it, leaving the same "nonzero, not seen to move" state the row
+         * uses before any change: once a stream has left, when the remaining
+         * streams' faults happened is no longer known. */
         if (st->publishes > 1)
         {
             if (counters[i] > st->counter[i])
@@ -481,17 +473,13 @@ static void hud_config_rows(const struct hud_layout *l, const struct hud_snapsho
     else
         snprintf(quantum, sizeof(quantum), "q --");
 
-    /* Two scopes on one row, kept terse because this row is width-constrained
-     * and the long form pushed the overlay past the bounds the present smoke
-     * test asserts.  "4 str  #7/2" is: four streams in this process, and the ring,
-     * quantum and xrun numbers describe stream 7, one of the two started render
-     * streams in its period group.  The out meters are the maximum over those two,
-     * not stream 7's own, so a quiet elected stream cannot hide a loud sibling.
-     * The id is a monotonic counter and not an
-     * index into that two, hence the #, so it can be the larger number.  The
-     * verbose legend below spells this out; the row itself cannot afford to.
-     * Unavailable rather than 0 where there is no id, because 0 is not a
-     * stream. */
+    /* Two scopes on one row.  "4 str  #7/2" is: four streams in this process, and
+     * the ring, quantum and xrun numbers describe stream 7, one of the two started
+     * render streams in its period group.  The out meters are the maximum over
+     * those two, not stream 7's own, so a quiet elected stream cannot hide a loud
+     * sibling.  The id is a monotonic counter and not an index into that two, hence
+     * the #, so it can be the larger number.  Unavailable rather than 0 where there
+     * is no id, because 0 is not a stream. */
     if (!hud_snapshot_have_stream_scope(view))
         snprintf(scope, sizeof(scope), "--");
     else if (!a->drv_stream_id)
@@ -769,15 +757,12 @@ static void hud_bed_rows(const struct hud_layout *l, const struct hud_snapshot_v
      * therefore do not mean equal loudness.  pre-gain, because SetVolume is
      * applied later during mixing and never to the buffer these are read from,
      * so a title at a quarter volume shows an unchanged bed. */
-    /* One resolved phrase, not two independent words.  The snapshot carries the
-     * engine and the request separately, sp_hrtf from stream->engine != 0 and
-     * sp_bed_virtualized from the request, and printing them side by side gave
-     * "stereo pan, virtualized", which is true twice over and still needs the
-     * reader to know the codebase to see that a requested HRTF path fell back to
-     * panning.  The driver's own log has the identical defect in a worse form: it
-     * announces "HRTF bed virtualization" before the engine is created, so it says
-     * that in the fallback too.  Naming the fallback outright is the whole point,
-     * and it is coloured as something to notice rather than as configuration. */
+    /* One resolved phrase, not two independent words: the snapshot carries the engine
+     * and the request separately (sp_hrtf from stream->engine != 0, sp_bed_virtualized
+     * from the request), and printing them side by side gave "stereo pan, virtualized",
+     * which is true twice over and still leaves the reader to work out that a requested
+     * HRTF path fell back to panning.  Naming the fallback is the point, coloured as
+     * something to notice rather than as configuration. */
     hud_text(bed_fallback ? HUD_STATE_WATCH : HUD_STATE_CONFIG,
              "bed   %s, rms, pre-gain, %u of %u ch%s",
              bed_backend(b->sp_hrtf, b->sp_bed_virtualized),
@@ -986,24 +971,9 @@ void hud_build_frame(struct swapchain_data *swapchain_data)
             hud_text(HUD_STATE_CONFIG, "str counts this process,");
             hud_text(HUD_STATE_CONFIG, "#id/n is the metered stream of its group");
         }
-        /* A courtesy credit, not a licence obligation: Steam Audio ships no NOTICE
-         * file, upstream or in the SDK, so Apache-2.0 section 4(d) is not engaged,
-         * and the tool already carries the licence and a verbatim copy of the
-         * upstream third-party notices at its root.
-         *
-         * Gated on the engine actually running, not on the feature existing or the
-         * bed asking for it: in the panning fallback no sample goes through Steam
-         * Audio, and a credit there would be a lying display of the same kind this
-         * component keeps removing.  No version number, because the layer cannot
-         * observe which libphonon loaded and a hardcoded one would be a claim it
-         * cannot make.
-         *
-         * In both views, not just the verbose one.  Compact is dense because every
-         * row there has to earn its place against gameplay, but that argument is
-         * about telemetry competing for space and an attribution line is not
-         * competing: it is the last row, it costs one line height, it appears only
-         * when the engine is genuinely running, and a credit only visible in a view
-         * nobody runs during play does not discharge the intent of asking for one. */
+        /* Gated on the engine actually running, not on the request: in the panning
+         * fallback no sample goes through Steam Audio.  No version number, because
+         * the layer cannot observe which libphonon loaded. */
         if (hud_snapshot_spatial_published(view) && view->b.sp_hrtf)
             hud_text(HUD_STATE_CONFIG, "HRTF powered by Steam Audio");
     }

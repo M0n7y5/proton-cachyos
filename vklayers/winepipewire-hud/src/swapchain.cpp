@@ -10,8 +10,7 @@
  *      Copyright (c) 2020 flightlessmango and MangoHud contributors
  *
  * Derived from MangoHud src/vulkan.cpp (Intel base plus MH changes), adapted to
- * this project's types.  This list tracks what this file actually contains and
- * grows as further functions land:
+ * this project's types.  What this file actually contains:
  *   overlay_CreateSwapchainKHR, for the create-info copy that ORs in
  *     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT and the create-then-track shape
  *   overlay_DestroySwapchainKHR, for the null-handle case and the

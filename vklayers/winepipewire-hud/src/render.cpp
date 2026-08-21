@@ -9,9 +9,8 @@
  *      per-image draw objects, dynamic font helpers, related shaders)
  *      Copyright (c) 2020 flightlessmango and MangoHud contributors
  *
- * Derived from MangoHud src/vulkan.cpp, adapted to this project's types.  This
- * list tracks what this file actually contains and grows as further functions
- * land:
+ * Derived from MangoHud src/vulkan.cpp, adapted to this project's types.  What
+ * this file actually contains:
  *   device_map_queues and new_queue_data, as hud_device_map_queues
  *   get_overlay_draw, as get_hud_draw
  *   vk_memory_type

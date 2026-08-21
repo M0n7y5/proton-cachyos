@@ -9,9 +9,8 @@
  *      per-image draw objects, dynamic font helpers, related shaders)
  *      Copyright (c) 2020 flightlessmango and MangoHud contributors
  *
- * Derived from MangoHud src/vulkan.cpp, adapted to this project's types.  This
- * list tracks what this file actually contains and grows as further functions
- * land:
+ * Derived from MangoHud src/vulkan.cpp, adapted to this project's types.  What
+ * this file actually contains:
  *   overlay_draw, as hud_draw
  *   queue_data, as hud_queue
  *   swapchain_data renderer fields, as hud_swapchain_render
