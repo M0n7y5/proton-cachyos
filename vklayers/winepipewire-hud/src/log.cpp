@@ -72,12 +72,29 @@ int hud_view_level(void)
 void hud_logf(const char *fmt, ...)
 {
     char line[512];
+    char out[576];
     va_list args;
+    ssize_t written;
+    int len;
 
     va_start(args, fmt);
-    if (vsnprintf(line, sizeof(line), fmt, args) >= 0)
-        fprintf(stderr, "winepipewire-hud[%d]: %s\n", (int)config().pid, line);
+    len = vsnprintf(line, sizeof(line), fmt, args);
     va_end(args);
+    if (len < 0)
+        return;
+
+    /* One write() per line, not fprintf: Wine's own debug channels share this
+     * fd from other threads, and stderr is unbuffered, so a multi-segment
+     * fprintf can emit a line in several syscalls and another thread's output
+     * lands mid-line.  Level 2 is the form users paste back, so a torn line
+     * costs a counter nobody can re-derive. */
+    len = snprintf(out, sizeof(out), "winepipewire-hud[%d]: %s\n", (int)config().pid, line);
+    if (len <= 0)
+        return;
+    if (len > (int)sizeof(out) - 1)
+        len = (int)sizeof(out) - 1;
+    written = write(STDERR_FILENO, out, (size_t)len);
+    (void)written;
 }
 
 uint64_t hud_mono_ns(void)
