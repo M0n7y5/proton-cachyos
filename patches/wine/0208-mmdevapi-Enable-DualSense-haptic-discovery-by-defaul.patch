@@ -1,35 +1,35 @@
-From 5be8d899d34e3c344a5a2cd6c4c2e800be28b738 Mon Sep 17 00:00:00 2001
+From 4595c680614782fc549bb6d6a7a4aa32aae4c783 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 12:03:40 +0200
-Subject: [PATCH] mmdevapi: Enable DualSense haptic discovery by default.
+Subject: [PATCH 208/209] mmdevapi: Enable DualSense haptic discovery by
+ default.
 
 ---
- dlls/mmdevapi/devenum.c | 16 +++++++++-------
- 1 file changed, 9 insertions(+), 7 deletions(-)
+ dlls/mmdevapi/devenum.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
 
 diff --git a/dlls/mmdevapi/devenum.c b/dlls/mmdevapi/devenum.c
-index f242d082cce..932f7f411c5 100644
+index 0c791288455..b7b89cb038d 100644
 --- a/dlls/mmdevapi/devenum.c
 +++ b/dlls/mmdevapi/devenum.c
-@@ -613,11 +613,13 @@ static const PROPERTYKEY devicepath_key = {
+@@ -613,11 +613,11 @@ static const PROPERTYKEY devicepath_key = {
      {0xb3f8fa53, 0x0004, 0x438e, {0x90, 0x03, 0x51, 0xa4, 0x6e, 0x13, 0x9b, 0xfc}}, 2
  };
  
 -/* Opt-in through the WINE_DUALSENSE_HAPTICS environment variable, exactly "1" like this
 - * fork's other environment toggles so "true" and "yes" do not enable it, or failing that
 - * HKCU\Software\Wine\mmdevapi DualSenseHaptics, a nonzero DWORD.  Steam sets environment
-+/* Enabled unless something turns it off, because without these devnodes a controller
-+ * cannot find its own haptic endpoint.  WINE_DUALSENSE_HAPTICS wins, exactly "0" or
-+ * exactly "1" like this fork's other environment toggles, so "true" and "yes" fall
-+ * through rather than silently meaning off.  DualSenseHaptics under
-+ * HKCU\Software\Wine\mmdevapi decides next, and only as a DWORD.  Steam sets environment
-  * variables per game, while the registry lives in a per-game Proton prefix.
+- * variables per game, while the registry lives in a per-game Proton prefix.
 - * Read once: unset costs one failed registry read and changes nothing. */
-+ * Read once: with neither set that is one failed registry read for the process. */
++/* Default on: without these devnodes a controller cannot find its own haptic
++ * endpoint.  WINE_DUALSENSE_HAPTICS wins over the registry value: Steam sets
++ * environment variables per game, while the registry lives in a per-game Proton
++ * prefix.  Exactly "0" or exactly "1" like this fork's other toggles, so "true"
++ * and "yes" fall through rather than silently meaning off. */
  static BOOL dualsense_haptics_enabled(void)
  {
      static int enabled = -1;
-@@ -628,10 +630,10 @@ static BOOL dualsense_haptics_enabled(void)
+@@ -628,10 +628,10 @@ static BOOL dualsense_haptics_enabled(void)
      if (enabled != -1)
          return enabled;
  

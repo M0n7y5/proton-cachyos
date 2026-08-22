@@ -1,15 +1,15 @@
-From ecfd38dad927a81df23b3023313484506369ff68 Mon Sep 17 00:00:00 2001
+From 0ed6ff9c10c26f7016dca665bde77c62cdc2b6f6 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 01:05:01 +0200
-Subject: [PATCH] mmdevapi: Allow enabling DualSense haptic discovery from the
- environment.
+Subject: [PATCH 207/209] mmdevapi: Allow enabling DualSense haptic discovery
+ from the environment.
 
 ---
  dlls/mmdevapi/devenum.c | 13 ++++++++++---
  1 file changed, 10 insertions(+), 3 deletions(-)
 
 diff --git a/dlls/mmdevapi/devenum.c b/dlls/mmdevapi/devenum.c
-index 6dd3b9dd75a..f242d082cce 100644
+index caf232a3403..0c791288455 100644
 --- a/dlls/mmdevapi/devenum.c
 +++ b/dlls/mmdevapi/devenum.c
 @@ -613,19 +613,26 @@ static const PROPERTYKEY devicepath_key = {

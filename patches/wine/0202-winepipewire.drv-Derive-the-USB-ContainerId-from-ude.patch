@@ -1,13 +1,13 @@
-From 027779a87a582d75efb1d2bfb07cdf6cdba40540 Mon Sep 17 00:00:00 2001
+From 9b99cd3167637fcb69dc154b66652edc09657051 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Fri, 21 Aug 2026 22:14:41 +0200
-Subject: [PATCH 202/206] winepipewire.drv: Derive the USB ContainerId from
+Subject: [PATCH 202/209] winepipewire.drv: Derive the USB ContainerId from
  udev, matching winebus.
 
 ---
  dlls/winepipewire.drv/Makefile.in |   4 +-
- dlls/winepipewire.drv/pipewire.c  | 106 ++++++++++++++++++++++++++++--
- 2 files changed, 104 insertions(+), 6 deletions(-)
+ dlls/winepipewire.drv/pipewire.c  | 105 ++++++++++++++++++++++++++++--
+ 2 files changed, 103 insertions(+), 6 deletions(-)
 
 diff --git a/dlls/winepipewire.drv/Makefile.in b/dlls/winepipewire.drv/Makefile.in
 index 9627ac51989..3e3552d437b 100644
@@ -23,7 +23,7 @@ index 9627ac51989..3e3552d437b 100644
  SOURCES = \
  	pipewire.c
 diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
-index ae5e37c1a63..15dff3f9d12 100644
+index ae5e37c1a63..7aef53b1cd8 100644
 --- a/dlls/winepipewire.drv/pipewire.c
 +++ b/dlls/winepipewire.drv/pipewire.c
 @@ -44,6 +44,9 @@
@@ -90,7 +90,7 @@ index ae5e37c1a63..15dff3f9d12 100644
          free(pd);
          return;
      }
-@@ -1783,10 +1798,80 @@ static struct probe_device *probe_find_device(struct probe *p, uint32_t device_i
+@@ -1783,10 +1798,79 @@ static struct probe_device *probe_find_device(struct probe *p, uint32_t device_i
      return NULL;
  }
  
@@ -168,14 +168,13 @@ index ae5e37c1a63..15dff3f9d12 100644
 +}
 +#endif
 +
-+/* Fallback ContainerId, stable across reboots, for an endpoint with no udev
-+ * sysfs path to derive one from: hash the vendor/product ids plus the
-+ * reboot-stable PipeWire node name.  A bus-less device gets a zero GUID, as
-+ * pulse leaves it without sysfs. */
++/* Fallback ContainerId for an endpoint with no udev sysfs path to derive one
++ * from; the inputs are chosen for being stable across reboots.  A device on
++ * no recognised bus gets a zero GUID, as pulse leaves it without sysfs. */
  static GUID make_container_id(enum pw_device_bus bus, UINT16 vendor_id, UINT16 product_id,
                                const char *node_name)
  {
-@@ -1824,6 +1909,18 @@ static void fill_device_path_info(struct pw_phys_device *dev, struct probe *p,
+@@ -1824,6 +1908,18 @@ static void fill_device_path_info(struct pw_phys_device *dev, struct probe *p,
      dev->product_id = pd ? pd->product_id : 0;
      dev->index = index;
      dev->container_id = make_container_id(dev->bus, dev->vendor_id, dev->product_id, pn->node_name);
@@ -194,7 +193,7 @@ index ae5e37c1a63..15dff3f9d12 100644
  }
  
  static void build_device_cache(struct probe *p)
-@@ -2060,6 +2157,7 @@ static NTSTATUS pipewire_test_connect(void *args)
+@@ -2060,6 +2156,7 @@ static NTSTATUS pipewire_test_connect(void *args)
      LIST_FOR_EACH_ENTRY_SAFE(pd, pdnext, &p.devices, struct probe_device, entry)
      {
          list_remove(&pd->entry);

@@ -1,7 +1,7 @@
-From ab276ac91c3f19e06a3effde5092cc1b8b1ac328 Mon Sep 17 00:00:00 2001
+From d82486d0325ef5eba7bccd86add17ceeaf7a5e69 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Fri, 21 Aug 2026 23:02:01 +0200
-Subject: [PATCH 203/206] setupapi: Initialize the Service value size when
+Subject: [PATCH 203/209] setupapi: Initialize the Service value size when
  checking for winehid devices.
 
 ---

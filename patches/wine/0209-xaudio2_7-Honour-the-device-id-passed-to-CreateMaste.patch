@@ -1,28 +1,26 @@
-From 51cd410756abd2f496a86a506d0639562a0dc4f4 Mon Sep 17 00:00:00 2001
+From ef27a96111b0821a9384fc30c37a806971c4d441 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 13:49:52 +0200
-Subject: [PATCH] xaudio2_7: Honour the device id passed to
+Subject: [PATCH 209/209] xaudio2_7: Honour the device id passed to
  CreateMasteringVoice.
 
 ---
- dlls/xaudio2_7/xaudio_dll.c | 58 +++++++++++++++++++++++++++++++++----
- 1 file changed, 53 insertions(+), 5 deletions(-)
+ dlls/xaudio2_7/xaudio_dll.c | 54 +++++++++++++++++++++++++++++++++----
+ 1 file changed, 49 insertions(+), 5 deletions(-)
 
 diff --git a/dlls/xaudio2_7/xaudio_dll.c b/dlls/xaudio2_7/xaudio_dll.c
-index fe9351e8b4a..2b6b6963173 100644
+index fe9351e8b4a..0c777cc905b 100644
 --- a/dlls/xaudio2_7/xaudio_dll.c
 +++ b/dlls/xaudio2_7/xaudio_dll.c
-@@ -1732,6 +1732,41 @@ static HRESULT WINAPI IXAudio2Impl_CreateSubmixVoice(IXAudio2 *iface,
+@@ -1732,6 +1732,38 @@ static HRESULT WINAPI IXAudio2Impl_CreateSubmixVoice(IXAudio2 *iface,
      return S_OK;
  }
  
 +#if XAUDIO2_VER >= 8
 +/* CreateMasteringVoice names its endpoint with an mmdevapi endpoint id, while
-+ * FAudio addresses devices by index into its own list of active render
-+ * endpoints.  FAudio's id path reads only the first character of the string as a
-+ * digit, so an endpoint id resolves to the default device there.  Asking FAudio
-+ * for the id of each index it has keeps the two in agreement: the index handed
-+ * back is by construction the one FAudio resolves to that endpoint. */
++ * FAudio indexes its own render list and reads only the first character of an
++ * id as a digit, so an endpoint id resolves to the default device there.
++ * Matching the id FAudio reports for each index keeps the two in agreement. */
 +static HRESULT faudio_device_index_from_id(FAudio *faudio, const WCHAR *id, UINT32 *out)
 +{
 +    FAudioDeviceDetails details;
@@ -43,9 +41,8 @@ index fe9351e8b4a..2b6b6963173 100644
 +        }
 +    }
 +
-+    /* IMMDeviceEnumerator::GetDevice answers an id that names no device in the
-+     * system with E_NOTFOUND, and CreateMasteringVoice documents ERROR_NOT_FOUND
-+     * for the device it was asked for not existing.  Same value, and a caller
++    /* IMMDeviceEnumerator::GetDevice answers an unknown id with E_NOTFOUND, and
++     * CreateMasteringVoice documents ERROR_NOT_FOUND; the same value.  A caller
 +     * that named a device must not be given a different one. */
 +    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
 +}
@@ -54,7 +51,7 @@ index fe9351e8b4a..2b6b6963173 100644
  static HRESULT WINAPI IXAudio2Impl_CreateMasteringVoice(IXAudio2 *iface,
          IXAudio2MasteringVoice **ppMasteringVoice, UINT32 inputChannels,
          UINT32 inputSampleRate, UINT32 flags,
-@@ -1748,10 +1783,26 @@ static HRESULT WINAPI IXAudio2Impl_CreateMasteringVoice(IXAudio2 *iface,
+@@ -1748,10 +1780,25 @@ static HRESULT WINAPI IXAudio2Impl_CreateMasteringVoice(IXAudio2 *iface,
  {
      IXAudio2Impl *This = impl_from_IXAudio2(iface);
      FAudioEffectChain *chain;
@@ -69,8 +66,7 @@ index fe9351e8b4a..2b6b6963173 100644
 +#if XAUDIO2_VER >= 8
 +    TRACE("device id %s, category %#x\n", debugstr_w(deviceId), streamCategory);
 +
-+    /* NULL, and an empty string as FAudio has always read it, mean the default
-+     * endpoint, which is index 0. */
++    /* NULL, and an empty string as FAudio has always read it, mean the default endpoint. */
 +    if(deviceId && *deviceId){
 +        hr = faudio_device_index_from_id(This->faudio, deviceId, &device_index);
 +        if(FAILED(hr))
@@ -81,7 +77,7 @@ index fe9351e8b4a..2b6b6963173 100644
      chain = wrap_effect_chain(pEffectChain);
  #if XAUDIO2_VER >= 8
      if (pEffectChain && !chain)
-@@ -1775,11 +1826,8 @@ static HRESULT WINAPI IXAudio2Impl_CreateMasteringVoice(IXAudio2 *iface,
+@@ -1775,11 +1822,8 @@ static HRESULT WINAPI IXAudio2Impl_CreateMasteringVoice(IXAudio2 *iface,
      This->mst.effect_chain = chain;
  
  #if XAUDIO2_VER >= 8

@@ -1,7 +1,7 @@
-From 068bb426a1d9186d6c9dc00a726d0748172b89ec Mon Sep 17 00:00:00 2001
+From 2e5d98ec2ee23fa2df25dae0343fea1d35c60f29 Mon Sep 17 00:00:00 2001
 From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
 Date: Fri, 21 Aug 2026 23:18:28 +0200
-Subject: [PATCH 204/206] mmdevapi: Register USB audio endpoints as PnP devices
+Subject: [PATCH 204/209] mmdevapi: Register USB audio endpoints as PnP devices
  for controller haptic discovery.
 
 ---
