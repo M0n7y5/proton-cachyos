@@ -1,0 +1,23 @@
+From 5f4764168c991f56982c1940cd87c2a3cf2d38d9 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 17:30:01 +0200
+Subject: [PATCH 17/27] winepipewire.drv: Warn instead of erroring when no
+ daemon answers the probe.
+
+---
+ dlls/winepipewire.drv/pipewire.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index 61a24e3ea26..80e63b6188a 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -1878,7 +1878,7 @@ static NTSTATUS pipewire_test_connect(void *args)
+ 
+     if (!(p.core = pw_context_connect(p.context, NULL, 0)))
+     {
+-        ERR("pw_context_connect failed during probe.\n");
++        WARN("pw_context_connect failed during probe.\n");
+         pw_thread_loop_unlock(p.loop);
+         pw_thread_loop_stop(p.loop);
+         pw_context_destroy(p.context);

@@ -1,0 +1,23 @@
+From 6f823cb07b02b465c7b4fe457d209c9ef1ab82a7 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 17:30:01 +0200
+Subject: [PATCH 18/27] server: Normalize the system thread flag from the
+ request.
+
+---
+ server/thread.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/server/thread.c b/server/thread.c
+index ca564dbb615..1a919386e8a 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -1736,7 +1736,7 @@ DECL_HANDLER(new_thread)
+     {
+         thread->system_regs = current->system_regs;
+         if (req->flags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) thread->suspend++;
+-        thread->is_system = req->is_system;
++        thread->is_system = !!req->is_system;
+         thread->dbg_hidden = !!(req->flags & THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER);
+         thread->bypass_proc_suspend = !!(req->flags & THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE);
+         add_process_thread( process, thread );

@@ -1,0 +1,38 @@
+From e3f5d70a1abe953d9d767292f00f5e6f377c8629 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 20:22:09 +0200
+Subject: [PATCH 26/27] server: Wrap the system thread debug event checks.
+
+---
+ server/mapping.c | 3 ++-
+ server/thread.c  | 3 ++-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/server/mapping.c b/server/mapping.c
+index e38acf456b8..c3d13e575b3 100644
+--- a/server/mapping.c
++++ b/server/mapping.c
+@@ -1261,7 +1261,8 @@ void generate_startup_debug_events( struct process *process )
+     LIST_FOR_EACH_ENTRY( thread, &process->thread_list, struct thread, proc_entry )
+     {
+         if (thread->is_system) continue;
+-        if (thread != first_thread) generate_debug_event( thread, DbgCreateThreadStateChange, NULL );
++        if (thread != first_thread)
++            generate_debug_event( thread, DbgCreateThreadStateChange, NULL );
+     }
+ 
+     /* generate dll events (in loading order) */
+diff --git a/server/thread.c b/server/thread.c
+index 1a919386e8a..c7eae120c42 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -1863,7 +1863,8 @@ DECL_HANDLER(init_thread)
+     current->entry_point = req->entry;
+ 
+     init_thread_context( current );
+-    if (!current->is_system) generate_debug_event( current, DbgCreateThreadStateChange, &req->entry );
++    if (!current->is_system)
++        generate_debug_event( current, DbgCreateThreadStateChange, &req->entry );
+     set_thread_base_priority( current, current->base_priority );
+     set_thread_affinity( current, current->affinity );
+ 

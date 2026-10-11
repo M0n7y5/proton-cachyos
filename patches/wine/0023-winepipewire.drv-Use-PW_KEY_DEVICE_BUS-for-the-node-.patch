@@ -1,0 +1,23 @@
+From 95431a42911cc662537a1349ee341363bdccf847 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 20:20:38 +0200
+Subject: [PATCH 23/27] winepipewire.drv: Use PW_KEY_DEVICE_BUS for the node
+ bus lookup.
+
+---
+ dlls/winepipewire.drv/pipewire.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index 28734512625..2f1d2fa7e6d 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -1437,7 +1437,7 @@ static void on_probe_registry_global(void *data, uint32_t id, uint32_t permissio
+          * also be what an unparsable id decays to. */
+         if (!parse_u32(dev_id, 10, 0, SPA_ID_INVALID - 1, &pn->device_id))
+             pn->device_id = SPA_ID_INVALID;
+-        pn->bus = parse_device_bus(spa_dict_lookup(props, "device.bus"));
++        pn->bus = parse_device_bus(spa_dict_lookup(props, PW_KEY_DEVICE_BUS));
+         /* Probe thread: keep everything UTF-8, no ntdll/WCHAR work.  The name
+          * cap is applied later, in utf8_to_wstr_capped on the unix-call thread. */
+         pn->node_name = strdup(node_name);

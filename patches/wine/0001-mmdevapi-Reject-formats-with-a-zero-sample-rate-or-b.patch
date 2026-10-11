@@ -1,0 +1,78 @@
+From 0a2fb801200b236123af8bec2d6751e2366818b2 Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 21:55:22 +0200
+Subject: [PATCH 01/27] mmdevapi: Reject formats with a zero sample rate or
+ block alignment.
+
+That currently triggers an assertion the PulseAudio library.
+
+Wine-Bug: not filed
+Upstream: f8470906c2540d184a65989c8f0722b9da3d852a
+Author: Giovanni Mascellani <gmascellani@codeweavers.com>
+(cherry picked from commit f8470906c2540d184a65989c8f0722b9da3d852a)
+
+The ALSA driver uses it as a divisor.
+
+Wine-Bug: not filed
+Upstream: af737dab8d9b455af4751e2f9a5cd6785dd82dd6
+Author: Giovanni Mascellani <gmascellani@codeweavers.com>
+(cherry picked from commit af737dab8d9b455af4751e2f9a5cd6785dd82dd6)
+---
+ dlls/mmdevapi/client.c       |  3 +++
+ dlls/mmdevapi/tests/render.c | 22 ++++++++++++++++++++++
+ 2 files changed, 25 insertions(+)
+
+diff --git a/dlls/mmdevapi/client.c b/dlls/mmdevapi/client.c
+index 29481de8e75..c70219f3f07 100644
+--- a/dlls/mmdevapi/client.c
++++ b/dlls/mmdevapi/client.c
+@@ -351,6 +351,9 @@ static HRESULT validate_wfx(const WAVEFORMATEX *fmt, AUDCLNT_SHAREMODE share_mod
+     if (FAILED(ret))
+         return ret;
+ 
++    if (fmt->nSamplesPerSec == 0 || fmt->nBlockAlign == 0)
++        return E_INVALIDARG;
++
+     switch (fmt->wFormatTag) {
+         case WAVE_FORMAT_EXTENSIBLE:
+             if ((fmt->cbSize != sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX) &&
+diff --git a/dlls/mmdevapi/tests/render.c b/dlls/mmdevapi/tests/render.c
+index eafa1073ad1..664ee027b8a 100644
+--- a/dlls/mmdevapi/tests/render.c
++++ b/dlls/mmdevapi/tests/render.c
+@@ -520,6 +520,27 @@ cleanup:
+     CoTaskMemFree(pwfx);
+ }
+ 
++static void test_invalid_sample_rate(void)
++{
++    WAVEFORMATEXTENSIBLE format = {{WAVE_FORMAT_EXTENSIBLE, 2, 0, 192000, 4, 16, 22}};
++    WAVEFORMATEX *closest = NULL;
++    IAudioClient *client;
++    HRESULT hr;
++
++    hr = IMMDevice_Activate(dev, &IID_IAudioClient, CLSCTX_INPROC_SERVER, NULL, (void **)&client);
++    ok(hr == S_OK, "Activate failed: %#lx\n", hr);
++    if (FAILED(hr)) return;
++
++    format.Samples.wValidBitsPerSample = 8;
++    format.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
++    format.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
++    hr = IAudioClient_IsFormatSupported(client, AUDCLNT_SHAREMODE_SHARED, &format.Format, &closest);
++    ok(hr == E_INVALIDARG, "IsFormatSupported returned %#lx for a zero sample rate.\n", hr);
++
++    CoTaskMemFree(closest);
++    IAudioClient_Release(client);
++}
++
+ static void test_formats(AUDCLNT_SHAREMODE mode, BOOL extensible)
+ {
+     IAudioClient *ac;
+@@ -2865,6 +2886,7 @@ START_TEST(render)
+     }
+ 
+     test_audioclient();
++    test_invalid_sample_rate();
+     test_references();
+     test_marshal();
+     if (GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode))

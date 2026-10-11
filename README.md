@@ -49,6 +49,15 @@ Most of Proton builds inside the [Proton SDK](docker/README.md) (a downstream
 of [SteamRT SDK][steamrt-sdk]) container with very few dependencies on the host
 side.
 
+On `pipewire-pr-ci`, pushing the branch or running **PipeWire PR build** in
+GitHub Actions builds `x86_64_v3` and `x86_64-wow64` on Ubicloud. Each variant
+uploads a `.tar.xz` archive and SHA-512 checksum, then runs the UMU launch smoke
+test. Build and test failures fail the workflow.
+
+This test uses CachyOS Proton `cffffad374a5` and Wine `2ce6b44caa66`, with the
+27 core-driver PR patches from Wine `5a3cc2161c7` in `patches/wine/`. The driver
+matches the PR source. The custom HRTF and HUD stack is not included.
+
 ## Preparing the build environment
 
 You need either a Docker or a Podman setup which Proton's build system uses

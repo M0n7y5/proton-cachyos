@@ -1,0 +1,24 @@
+From b387373d74eed258e2298b4bdf2b5136bdfd9eed Mon Sep 17 00:00:00 2001
+From: M0n7y5 <17201053+M0n7y5@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 20:21:00 +0200
+Subject: [PATCH 25/27] winepipewire.drv: Report a failed flush when changing
+ the sample rate.
+
+---
+ dlls/winepipewire.drv/pipewire.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winepipewire.drv/pipewire.c b/dlls/winepipewire.drv/pipewire.c
+index 77443a9c004..869633044f5 100644
+--- a/dlls/winepipewire.drv/pipewire.c
++++ b/dlls/winepipewire.drv/pipewire.c
+@@ -4556,7 +4556,8 @@ static NTSTATUS pipewire_set_sample_rate(void *args)
+         goto exit;
+     }
+ 
+-    pw_stream_flush(stream->pw, false);
++    if (pw_stream_flush(stream->pw, false) < 0)
++        WARN("pw_stream_flush failed for stream %p.\n", stream);
+ 
+     stream->period_bytes = period_bytes;
+     stream->info.rate = params->rate;

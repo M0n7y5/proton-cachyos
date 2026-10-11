@@ -21,7 +21,7 @@ on:
       runner:
         required: false
         type: string
-        default: 'ubuntu-24.04'
+        default: 'ubicloud-standard-30'
       continue:
         required: true
         type: boolean
@@ -34,6 +34,7 @@ jobs:
     steps:
 
     - name: Debloat GitHub runner
+      if: ${{ !startsWith(inputs.runner, 'ubicloud') }}
       uses: endersonmenezes/free-disk-space@v3
       with:
         remove_android: true
@@ -76,10 +77,33 @@ jobs:
         fetch-tags: true
         submodules: false
 
+    - name: Submodule identifier
+      id: submodules-id
+      run: |
+        pins=$(git submodule status | sha1sum | cut -d' ' -f1)
+        echo "pins=$pins" >> "$GITHUB_OUTPUT"
+
+    - name: Restore submodule cache
+      id: submodules-restore
+      uses: actions/cache/restore@v5
+      with:
+        path: .git/modules
+        key: submodules-${{ hashFiles('.gitmodules') }}-${{ steps.submodules-id.outputs.pins }}
+        restore-keys: |
+          submodules-${{ hashFiles('.gitmodules') }}-
+
     - name: Patch
       run: |
         git submodule update --init --filter=tree:0 --recursive
         mkdir ./build
+
+    - name: Save submodule cache
+      id: submodules-save
+      if: always() && steps.submodules-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: .git/modules
+        key: ${{ steps.submodules-restore.outputs.cache-primary-key }}
 
     - name: Configure
       working-directory: ./build
@@ -97,7 +121,7 @@ jobs:
       run: |
         image=$(make get-steamrt-image | tail -1)
         checksum=$(echo "$image ${{ inputs.cflags }} ${{ inputs.configure }}" | sha1sum | cut -d' ' -f1)
-        echo "checksum=$checksum" >> $GITHUB_OUTPUT
+        echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
 
     - name: Restore cache
       id: ccache-restore
@@ -108,10 +132,17 @@ jobs:
         restore-keys: |
           ccache-proton-${{ steps.ccache-id.outputs.checksum }}
 
+    - name: Size ccache
+      run: ccache -M 25G
+
     - name: Make ${{ inputs.name }}
       working-directory: ./build
       run: |
         make redist
+
+    - name: ccache stats
+      if: always()
+      run: ccache -s
 
     - name: Save cache
       id: ccache-save
@@ -132,4 +163,3 @@ jobs:
       with:
         name: ${{ inputs.name }}.sha512sum
         path: ./build/${{ inputs.name }}.sha512sum
-
